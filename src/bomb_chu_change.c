@@ -14,7 +14,67 @@
 #include "z64player.h"
 //#include "assets/objects/gameplay_keep/gameplay_keep.h"
 
-#define BOMBCHU_SCALE 0.01f
+typedef void (*PlayerItemActionInitFunc)(PlayState*, Player*);
+
+s32 Player_UpperAction_CarryActor(Player* this, PlayState* play);
+s32 Player_UpperAction_ChangeHeldItem(Player* this, PlayState* play);
+
+
+typedef struct {
+    /* 0x0 */ void (*drawFunc)(PlayState*, s16);
+    /* 0x4 */ void* drawResources[8]; // Either display lists (Gfx*) or matrices (Mtx*)
+} DrawItemTableEntry;                 // size = 0x24
+
+typedef enum {
+    IT_CUSTOM = 0,
+    IT_MELEE_1H,
+    IT_MELEE_2H,
+    IT_USE,         //Immediately used items, like thrown Deku nuts
+    IT_BOTTLED,
+    IT_TRADE,
+    IT_VIEWFINDER,  //Items that you 'look through', e.g. pictograph, telescope
+    IT_PROJECTILE,  //Objects that 'shoot out of' something, uses first person + Z-targeting
+    IT_EXPLOSIVE,   //Actually just any items that produce something 'held above your head'
+    IT_SPELL,       //Magic with a casting animation
+    IT_MASK,
+    IT_TRANSFORMATION_MASK
+} ItemType;
+
+typedef enum {
+    UI_OOT_MM,
+    UI_OOT_ONLY,
+    UI_MM_ONLY
+} GamesUsedIn;
+
+typedef enum {
+    SA_AUTO_EMPTY = -1,     //for blank slots put there so the items can be collected later
+    SA_AUTO_PREFILL = -2,   //for the slot to be filled with the item unconditionally
+    SA_NONE = -3            //provides no slot assignment, mod should assign item using custom code
+} SlotAssignment;
+
+typedef struct {
+    PlayerItemActionInitFunc initFunc; //Used to initialize the item action
+    PlayerUpperActionFunc actionFunc;  //The item acton's update code
+    u8 modelGroup;                      //Should be a valid PlayerModelGroup
+    s16 slotAssignment;         //The inventory slot position number the item is to be assigned, otherwise SA_NONE gives no slot-
+                                //for moders who want to deal with that themselves, while SA_AUTO_(EMPTY/PREFILL) generates a new one
+} InventoryItemPerGameEntry;
+
+typedef struct {
+    char* itemName;             //Name the item will be refered to as internally, should be unique
+    GamesUsedIn usedIn;         //Will this item be used in OoT, MM or both?
+    TexturePtr icon;            //Pointer to RGBA32 Texture
+    TexturePtr nameLabelEng;    //Pointer to IA8 Texture
+
+    char* EZTR_KaleidoPopupText;        //Used in MM by any item assigned to a slot
+    char* EZTR_GiveItemText;            //Used for givables
+    InventoryItemPerGameEntry ocarinaFuncs;
+    InventoryItemPerGameEntry mujuraFuncs;
+    ItemType type;                      //optional, provides information to the integration code
+    DrawItemTableEntry* drawEntryGI;    //Needed for givable/tradable items, otherwise optional
+    s16 salePrice;                      //defaults to 0, meaning the item will not be sold, other numbers mean shops will accept it
+    char* metadata;                     //optional, arbitrary null terminated data used to communicate with other mods
+} CustomItemEntry;
 
 RECOMP_PATCH void EnBomChu_Move(EnBomChu* this, PlayState* play) {
     CollisionPoly* polySide = NULL;
@@ -288,6 +348,8 @@ u64 gLand_mine_item_name_eng[] = {
 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000
 };
 
+#define NewItemNum s16
+
 #define IDLE_ANIM_NONE 0
 
 //This should be 0x50
@@ -299,11 +361,6 @@ u64 gLand_mine_item_name_eng[] = {
 #define PLAYER_IA_BOMBMINE NEW_ACTION_NUMBERS
 #define MESSAGE_ICON_NEW EZTR_ICON_NOTHING_51
 
-typedef void (*PlayerItemActionInitFunc)(PlayState*, Player*);
-
-s32 Player_UpperAction_CarryActor(Player* this, PlayState* play);
-s32 Player_UpperAction_ChangeHeldItem(Player* this, PlayState* play);
-
 extern s8 sItemItemActions[];
 extern PlayerUpperActionFunc sItemActionUpdateFuncs[PLAYER_IA_MAX];
 extern PlayerItemActionInitFunc sItemActionInitFuncs[PLAYER_IA_MAX];
@@ -312,21 +369,15 @@ extern s32 sPlayerUseHeldItem;
 extern s32 sPlayerHeldItemButtonIsHeldDown;
 extern PlayerAnimationHeader* D_8085BE84[PLAYER_ANIMGROUP_MAX][PLAYER_ANIMTYPE_MAX];
 
-// This function can be named whatever you want.
-EZTR_ON_INIT void ETZR_Item_Expansion_function() {
-    EZTR_Basic_ReplaceText(
-        (0x1700+ITEM_BOMBMINE),
-        EZTR_STANDARD_TEXT_BOX_II,
-        1,
-        MESSAGE_ICON_NEW,
-        EZTR_NO_VALUE,
-        EZTR_NO_VALUE,
-        EZTR_NO_VALUE,
-        true,
-        "A bomb with custom behaviour!" EZTR_CC_NEWLINE "Explodes in place, so run" EZTR_CC_NEWLINE "away!" EZTR_CC_END,
-        NULL
-    );
-}
+u16 currentNewItemTotal = 0;
+s8 gNewItemActions[NUM_NEW_ITEMS] = {};
+PlayerItemActionInitFunc gNewItemActionInitFuncs[NUM_NEW_ITEMS] = {};
+PlayerUpperActionFunc gNewItemActionUpdateFuncs[NUM_NEW_ITEMS] = {};//Use Player_UpperAction_CarryActor
+TexturePtr gNewItemIcons[NUM_NEW_ITEMS];
+TexturePtr gNewItemNames[NUM_NEW_ITEMS];
+u8 sNewActionModelGroups[NUM_NEW_ITEMS];
+
+NewItemNum sBombmineIN = -1;
 
 
 void Player_InitNewExplosiveIA(PlayState* play, Player* this) {
@@ -358,12 +409,17 @@ void Player_InitNewExplosiveIA(PlayState* play, Player* this) {
     }
 }
 
+s32 Player_UpperAction_NewCarryActor(Player* this, PlayState* play) {
+    return Player_UpperAction_CarryActor(this, play);
+}
+
 RECOMP_PATCH PlayerExplosive Player_ExplosiveFromIA(Player* player, PlayerItemAction itemAction) {
     PlayerExplosive explosive;
-    if (itemAction == PLAYER_IA_BOMBMINE)
-        explosive = PLAYER_EXPLOSIVE_BOMBCHU;
-    else
+    if (itemAction < PLAYER_IA_MAX)
         explosive = GET_EXPLOSIVE_FROM_IA(itemAction);
+    else
+        explosive = PLAYER_EXPLOSIVE_BOMBCHU;
+
 
     if ((explosive > PLAYER_EXPLOSIVE_NONE) && (explosive < PLAYER_EXPLOSIVE_MAX)) {
         return explosive;
@@ -374,22 +430,16 @@ RECOMP_PATCH PlayerExplosive Player_ExplosiveFromIA(Player* player, PlayerItemAc
 
 RECOMP_PATCH PlayerModelGroup Player_ActionToModelGroup(Player* player, PlayerItemAction itemAction) {
     PlayerModelGroup modelGroup;
-    if (itemAction == PLAYER_IA_BOMBMINE)
-        modelGroup = PLAYER_MODELGROUP_EXPLOSIVES;
-    else
+    if (itemAction < PLAYER_IA_MAX)
         modelGroup = sActionModelGroups[itemAction];
+    else
+        modelGroup = sNewActionModelGroups[itemAction-NEW_ACTION_NUMBERS];
 
     if ((modelGroup == PLAYER_MODELGROUP_ONE_HAND_SWORD) && Player_IsGoronOrDeku(player)) {
         return PLAYER_MODELGROUP_1;
     }
     return modelGroup;
 }
-
-s8 gNewItemActions[NUM_NEW_ITEMS] = {PLAYER_IA_BOMBMINE};
-PlayerItemActionInitFunc gNewItemActionInitFuncs[NUM_NEW_ITEMS] = {Player_InitNewExplosiveIA};
-PlayerUpperActionFunc gNewItemActionUpdateFuncs[NUM_NEW_ITEMS] = {};//Use Player_UpperAction_CarryActor
-TexturePtr gNewItemIcons[NUM_NEW_ITEMS];
-TexturePtr gNewItemNames[NUM_NEW_ITEMS];
 
 extern s32 D_801F6B08;
 
@@ -413,6 +463,10 @@ extern TexturePtr gStrayFairyGlowingCircleIconTex;
 
 s16 ItemExtension_ToNewItemRange(s16 itemID) {
     return itemID - NEW_ACTION_ITEMS;
+}
+
+s16 ItemExtension_FromItemRangeToItemID(s16 itemID) {
+    return itemID + NEW_ACTION_ITEMS;
 }
 
 //Sets a special message item entry to denote that the text will display a new item icon
@@ -448,15 +502,69 @@ RECOMP_HOOK_RETURN("Message_LoadItemIcon") void FinalizeMessage_LoadItemIcon() {
     }
 }
 
+CustomItemEntry bombmineEntry = {
+    .itemName = "BombMine",
+    .icon = gLand_mine_icon,
+    .nameLabelEng = gLand_mine_item_name_eng,
+    .EZTR_KaleidoPopupText = "A bomb with custom behaviour!" EZTR_CC_NEWLINE "Explodes in place, so run" EZTR_CC_NEWLINE "away!" EZTR_CC_END,
+    .mujuraFuncs = {
+        .initFunc = Player_InitNewExplosiveIA,
+        .actionFunc = Player_UpperAction_NewCarryActor,
+        .modelGroup = PLAYER_MODELGROUP_EXPLOSIVES,
+        .slotAssignment = SLOT_LENS_OF_TRUTH,
+    },
+    .type = IT_EXPLOSIVE,
+};
+
 RECOMP_CALLBACK("*", recomp_on_init)
 void on_init() {
+}
+
+void Core_Replace_Popup_Text(s16 newEntryNum, char* EZTR_text) {
+    EZTR_Basic_ReplaceText(
+        (0x1700+NEW_ACTION_ITEMS+newEntryNum),
+        EZTR_STANDARD_TEXT_BOX_I,
+        48,
+        MESSAGE_ICON_NEW,
+        EZTR_NO_VALUE,
+        EZTR_NO_VALUE,
+        EZTR_NO_VALUE,
+        true,
+        EZTR_text,
+        NULL
+    );
+}
+
+NewItemNum InitializeNewItemFromEntry(CustomItemEntry* entry) {
+    if (currentNewItemTotal >= NUM_NEW_ITEMS)
+        return -1;
+
+    gNewItemActions[currentNewItemTotal] = NEW_ACTION_NUMBERS+currentNewItemTotal;
+    gNewItemActionInitFuncs[currentNewItemTotal] = entry->mujuraFuncs.initFunc;
+    gNewItemActionUpdateFuncs[currentNewItemTotal] = entry->mujuraFuncs.actionFunc;
+    gNewItemIcons[currentNewItemTotal] = entry->icon;
+    gNewItemNames[currentNewItemTotal] = entry->nameLabelEng;
+    sNewActionModelGroups[currentNewItemTotal] = entry->mujuraFuncs.modelGroup;
+    Core_Replace_Popup_Text(currentNewItemTotal, entry->EZTR_KaleidoPopupText);
+
+    return currentNewItemTotal++;
+}
+
+RECOMP_DECLARE_EVENT(init_items_event());
+
+EZTR_ON_INIT void ETZR_Item_Expansion_function() {
+    init_items_event();
+}
+
+RECOMP_CALLBACK(".", init_items_event)
+void init_bombmine() {
     recomp_printf("Callback Called!");
-    gNewItemIcons[0] = gLand_mine_icon;
-    gNewItemNames[0] = gLand_mine_item_name_eng;
+    sBombmineIN = InitializeNewItemFromEntry(&bombmineEntry);
 }
 
 RECOMP_HOOK("Player_InitCommon") void setup_inventory() {
-    INV_CONTENT(ITEM_PICTOGRAPH_BOX) = ITEM_BOMBMINE;
+    if (sBombmineIN > -1)
+        gSaveContext.save.saveInfo.inventory.items[bombmineEntry.mujuraFuncs.slotAssignment] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
 }
 
 PlayerItemAction getUpdatedItemAction(ItemId item) {
@@ -502,8 +610,6 @@ RECOMP_PATCH void Player_InitItemAction(PlayState* play, Player* this, PlayerIte
 }
 
 void newSetUpper(PlayState* play, Player* this) {
-    gNewItemActionUpdateFuncs[0] = Player_UpperAction_CarryActor;
-    //Player_SetUpperAction(play, this, this->heldItemAction<NEW_ACTION_NUMBERS ? sItemActionUpdateFuncs[this->heldItemAction] : gNewItemActionUpdateFuncs[this->heldItemAction-NEW_ACTION_NUMBERS]);
     recomp_printf("getHeldItemAction: %d\n", this->heldItemAction);
     Player_SetUpperAction(play, this, (this->heldItemAction < NEW_ACTION_NUMBERS) ?
                     sItemActionUpdateFuncs[this->heldItemAction] :
@@ -515,7 +621,6 @@ RECOMP_PATCH void func_808309CC(PlayState* play, Player* this) {
         Player_FinishItemChange(play, this);
     }
 
-    //Player_SetUpperAction(play, this, this->heldItemAction<NEW_ACTION_NUMBERS ? sItemActionUpdateFuncs[this->heldItemAction] : gNewItemActionUpdateFuncs[this->heldItemAction-NEW_ACTION_NUMBERS]);
     newSetUpper(play,this);
     this->unk_ACC = 0;
     this->idleType = PLAYER_IDLE_DEFAULT;
@@ -524,21 +629,11 @@ RECOMP_PATCH void func_808309CC(PlayState* play, Player* this) {
 }
 
 RECOMP_PATCH s32 Player_UpperAction_ChangeHeldItem(Player* this, PlayState* play) {
-    //Inventory_UnequipItem(ITEM_PICTOGRAPH_BOX);
-    // for (i = EQUIP_SLOT_C_LEFT; i <= EQUIP_SLOT_C_RIGHT; i++) {
-    //     if (GET_CUR_FORM_BTN_ITEM(i) == ITEM_PICTOGRAPH_BOX) {
-    //         SET_CUR_FORM_BTN_ITEM(i, ITEM_BOMBMINE);
-    //         Interface_LoadItemIconImpl(play, i);
-    //         break;
-    //     }
-    // }
-
     if (PlayerAnimation_Update(play, &this->skelAnimeUpper) ||
         ((Player_ItemToItemAction(this, this->heldItemId) == this->heldItemAction) &&
          (sPlayerUseHeldItem = (sPlayerUseHeldItem || ((this->modelAnimType != PLAYER_ANIMTYPE_3) &&
                                                        (this->heldItemAction != PLAYER_IA_DEKU_STICK) &&
                                                        (play->bButtonAmmoPlusOne == 0)))))) {
-        //Player_SetUpperAction(play, this, this->heldItemAction<NEW_ACTION_NUMBERS ? sItemActionUpdateFuncs[this->heldItemAction] : gNewItemActionUpdateFuncs[this->heldItemAction-NEW_ACTION_NUMBERS]);
         newSetUpper(play,this);
         this->unk_ACC = 0;
         this->idleType = PLAYER_IDLE_DEFAULT;
@@ -560,7 +655,6 @@ RECOMP_PATCH s32 Player_UpperAction_ChangeHeldItem(Player* this, PlayState* play
 RECOMP_PATCH s32 Player_UpperAction_5(Player* this, PlayState* play) {
     sPlayerUseHeldItem = sPlayerHeldItemButtonIsHeldDown;
     if (sPlayerUseHeldItem || PlayerAnimation_Update(play, &this->skelAnimeUpper)) {
-        //Player_SetUpperAction(play, this, this->heldItemAction<NEW_ACTION_NUMBERS ? sItemActionUpdateFuncs[this->heldItemAction] : gNewItemActionUpdateFuncs[this->heldItemAction-NEW_ACTION_NUMBERS]);
         newSetUpper(play,this);
         PlayerAnimation_PlayLoop(play, &this->skelAnimeUpper, D_8085BE84[PLAYER_ANIMGROUP_wait][this->modelAnimType]);
         this->idleType = PLAYER_IDLE_DEFAULT;
@@ -572,7 +666,6 @@ RECOMP_PATCH s32 Player_UpperAction_5(Player* this, PlayState* play) {
 
 //z_parameter.c
 extern u8 gMagicArrowEquipEffectTex[];
-extern u8 gItemIconMoonsTearTex[];
 
 RECOMP_PATCH void Interface_LoadItemIconImpl(PlayState* play, u8 btn) {
     InterfaceContext* interfaceCtx = &play->interfaceCtx;
