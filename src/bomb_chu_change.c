@@ -360,6 +360,8 @@ u64 gLand_mine_item_name_eng[] = {
 #define NEW_ACTION_NUMBERS PLAYER_IA_MAX
 #define PLAYER_IA_BOMBMINE NEW_ACTION_NUMBERS
 #define MESSAGE_ICON_NEW EZTR_ICON_NOTHING_51
+#define MAX_REGULAR_SLOTS 0x30
+#define NUM_NEW_INV_SLOTS NUM_NEW_ITEMS
 
 extern s8 sItemItemActions[];
 extern PlayerUpperActionFunc sItemActionUpdateFuncs[PLAYER_IA_MAX];
@@ -370,12 +372,15 @@ extern s32 sPlayerHeldItemButtonIsHeldDown;
 extern PlayerAnimationHeader* D_8085BE84[PLAYER_ANIMGROUP_MAX][PLAYER_ANIMTYPE_MAX];
 
 u16 currentNewItemTotal = 0;
+u16 currentNextFreeSlot = MAX_REGULAR_SLOTS;
 s8 gNewItemActions[NUM_NEW_ITEMS] = {};
 PlayerItemActionInitFunc gNewItemActionInitFuncs[NUM_NEW_ITEMS] = {};
 PlayerUpperActionFunc gNewItemActionUpdateFuncs[NUM_NEW_ITEMS] = {};//Use Player_UpperAction_CarryActor
 TexturePtr gNewItemIcons[NUM_NEW_ITEMS];
 TexturePtr gNewItemNames[NUM_NEW_ITEMS];
 u8 sNewActionModelGroups[NUM_NEW_ITEMS];
+u8 sNewItemSlotAssignments[NUM_NEW_ITEMS];
+s16 gNewInventoryItemSlots[NUM_NEW_ITEMS];
 
 NewItemNum sBombmineIN = -1;
 
@@ -545,6 +550,12 @@ NewItemNum InitializeNewItemFromEntry(CustomItemEntry* entry) {
     gNewItemIcons[currentNewItemTotal] = entry->icon;
     gNewItemNames[currentNewItemTotal] = entry->nameLabelEng;
     sNewActionModelGroups[currentNewItemTotal] = entry->mujuraFuncs.modelGroup;
+    if (entry->mujuraFuncs.slotAssignment >= 0)
+        sNewItemSlotAssignments[currentNewItemTotal] = entry->mujuraFuncs.slotAssignment;
+    else if (entry->mujuraFuncs.slotAssignment == SA_AUTO_EMPTY || entry->mujuraFuncs.slotAssignment == SA_AUTO_PREFILL)
+        sNewItemSlotAssignments[currentNewItemTotal] = currentNextFreeSlot++;
+    else
+        sNewItemSlotAssignments[currentNewItemTotal] = SLOT_NONE;
     Core_Replace_Popup_Text(currentNewItemTotal, entry->EZTR_KaleidoPopupText);
 
     return currentNewItemTotal++;
@@ -559,12 +570,25 @@ EZTR_ON_INIT void ETZR_Item_Expansion_function() {
 RECOMP_CALLBACK(".", init_items_event)
 void init_bombmine() {
     recomp_printf("Callback Called!");
+    for (s16 ii = 0; ii < NUM_NEW_INV_SLOTS; ii++) {
+        gNewInventoryItemSlots[ii] = ITEM_NONE;
+    }
     sBombmineIN = InitializeNewItemFromEntry(&bombmineEntry);
 }
 
-RECOMP_HOOK("Player_InitCommon") void setup_inventory() {
-    if (sBombmineIN > -1)
-        gSaveContext.save.saveInfo.inventory.items[bombmineEntry.mujuraFuncs.slotAssignment] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
+RECOMP_HOOK("Player_InitCommon") void setup_inventory(Player* this, PlayState* play, FlexSkeletonHeader* skelHeader) {
+    if (sBombmineIN > -1) {
+        if (bombmineEntry.mujuraFuncs.slotAssignment >= 0 && bombmineEntry.mujuraFuncs.slotAssignment < SLOT_NONE) {
+            if (bombmineEntry.mujuraFuncs.slotAssignment < MAX_REGULAR_SLOTS)
+                gSaveContext.save.saveInfo.inventory.items[bombmineEntry.mujuraFuncs.slotAssignment] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
+            else
+                gNewInventoryItemSlots[bombmineEntry.mujuraFuncs.slotAssignment-MAX_REGULAR_SLOTS] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
+        }
+
+        SET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_LEFT, ItemExtension_FromItemRangeToItemID(sBombmineIN));
+        SET_CUR_FORM_BTN_SLOT(EQUIP_SLOT_C_LEFT, sNewItemSlotAssignments[sBombmineIN]);
+        Interface_LoadItemIconImpl(play, EQUIP_SLOT_C_LEFT);
+    }
 }
 
 PlayerItemAction getUpdatedItemAction(ItemId item) {
