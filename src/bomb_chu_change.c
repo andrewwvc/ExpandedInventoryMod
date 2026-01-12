@@ -516,7 +516,7 @@ CustomItemEntry bombmineEntry = {
         .initFunc = Player_InitNewExplosiveIA,
         .actionFunc = Player_UpperAction_NewCarryActor,
         .modelGroup = PLAYER_MODELGROUP_EXPLOSIVES,
-        .slotAssignment = SLOT_LENS_OF_TRUTH,
+        .slotAssignment = MAX_REGULAR_SLOTS, //SLOT_LENS_OF_TRUTH,
     },
     .type = IT_EXPLOSIVE,
 };
@@ -782,6 +782,9 @@ RECOMP_PATCH void Interface_DrawPauseMenuEquippingIcons(PlayState* play) {
 
 //z_kaleido_item.c
 
+#define EXTRA_ITEM_ROWS 1
+#define ITEM_TOTAL_NUM_SLOTS (ITEM_NUM_SLOTS+(ITEM_GRID_COLS*EXTRA_ITEM_ROWS))
+
 extern s16 sMagicArrowEffectsR_ovl_kaleido_scope[];
 extern s16 sMagicArrowEffectsG_ovl_kaleido_scope[];
 extern s16 sMagicArrowEffectsB_ovl_kaleido_scope[];
@@ -803,9 +806,12 @@ RECOMP_PATCH void KaleidoScope_DrawItemSelect(PlayState* play) {
     // Loop over c-buttons (i) and vtx offset (j)
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIA_PRIM, G_CC_MODULATEIA_PRIM);
     gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, 255, 255, 255, pauseCtx->alpha);
-    for (i = 0, j = ITEM_NUM_SLOTS * 4; i < 3; i++, j += 4) {
+    for (i = 0, j = ITEM_TOTAL_NUM_SLOTS * 4; i < 3; i++, j += 4) {//The ITEM_TOTAL_NUM_SLOTS causes the appropriate itemVtx index to be used
         if (GET_CUR_FORM_BTN_ITEM(i + 1) != ITEM_NONE) {
             if (GET_CUR_FORM_BTN_SLOT(i + 1) < ITEM_NUM_SLOTS) {
+                gSPVertex(POLY_OPA_DISP++, &pauseCtx->itemVtx[j], 4, 0);
+                POLY_OPA_DISP = Gfx_DrawTexQuadIA8(POLY_OPA_DISP, gEquippedItemOutlineTex, 32, 32, 0);
+            } else if (GET_CUR_FORM_BTN_SLOT(i + 1) >= MAX_REGULAR_SLOTS && GET_CUR_FORM_BTN_SLOT(i + 1) < MAX_REGULAR_SLOTS+(EXTRA_ITEM_ROWS*ITEM_GRID_COLS)) {
                 gSPVertex(POLY_OPA_DISP++, &pauseCtx->itemVtx[j], 4, 0);
                 POLY_OPA_DISP = Gfx_DrawTexQuadIA8(POLY_OPA_DISP, gEquippedItemOutlineTex, 32, 32, 0);
             }
@@ -864,6 +870,36 @@ RECOMP_PATCH void KaleidoScope_DrawItemSelect(PlayState* play) {
         }
     }
 
+    for (; i < ITEM_TOTAL_NUM_SLOTS; i++, j += 4) {
+        gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, 255, 255, 255, pauseCtx->alpha);
+        s16 newItem = gNewInventoryItemSlots[i-ITEM_NUM_SLOTS];
+        if (newItem != ITEM_NONE) {
+            if ((pauseCtx->mainState == PAUSE_MAIN_STATE_IDLE) && (pauseCtx->pageIndex == PAUSE_ITEM) &&
+                (pauseCtx->cursorSpecialPos == 0) /*&& gPlayerFormSlotRestrictions[GET_PLAYER_FORM][i]*/) {
+                if (i == pauseCtx->cursorSlot[PAUSE_ITEM]) {
+                    // Increase the size of the selected item
+                    pauseCtx->itemVtx[j + 0].v.ob[0] = pauseCtx->itemVtx[j + 2].v.ob[0] =
+                        pauseCtx->itemVtx[j + 0].v.ob[0] - 2;
+                    pauseCtx->itemVtx[j + 1].v.ob[0] = pauseCtx->itemVtx[j + 3].v.ob[0] =
+                        pauseCtx->itemVtx[j + 0].v.ob[0] + 32;
+                    pauseCtx->itemVtx[j + 0].v.ob[1] = pauseCtx->itemVtx[j + 1].v.ob[1] =
+                        pauseCtx->itemVtx[j + 0].v.ob[1] + 2;
+                    pauseCtx->itemVtx[j + 2].v.ob[1] = pauseCtx->itemVtx[j + 3].v.ob[1] =
+                        pauseCtx->itemVtx[j + 0].v.ob[1] - 32;
+                }
+            }
+
+            gSPVertex(POLY_OPA_DISP++, &pauseCtx->itemVtx[j + 0], 4, 0);
+            if (newItem < NEW_ACTION_ITEMS) {
+                KaleidoScope_DrawTexQuadRGBA32(
+                    play->state.gfxCtx, gItemIcons[newItem], 32, 32, 0);
+            } else {
+                KaleidoScope_DrawTexQuadRGBA32(
+                    play->state.gfxCtx, gNewItemIcons[ItemExtension_ToNewItemRange(newItem)], 32, 32, 0);
+            }
+        }
+    }
+
     // Draw the ammo digits
     if (pauseCtx->pageIndex == PAUSE_ITEM) {
         if ((pauseCtx->state == PAUSE_STATE_MAIN) &&
@@ -895,3 +931,146 @@ RECOMP_PATCH void Kaleido_LoadItemNameStatic(void* segment, u32 texIndex) {
     else
         memcpy(segment, gNewItemNames[ItemExtension_ToNewItemRange(texIndex)], 0x400);
 }
+
+static PlayState* MyTempPlay;
+static GraphicsContext* MyTempGfxCtx;
+
+RECOMP_HOOK("KaleidoScope_SetVertices")
+void SetupKaleidoScope_SetVertices(PlayState* play, GraphicsContext* gfxCtx) {
+     MyTempPlay = play;
+     MyTempGfxCtx = gfxCtx;
+}
+
+RECOMP_HOOK_RETURN("KaleidoScope_SetVertices")
+void FinalizeKaleidoScope_SetVertices() {
+    PauseContext* pauseCtx = &MyTempPlay->pauseCtx;
+    s16 i;
+    s16 j;
+    s16 k;
+    s16 vtx_x;
+    s16 vtx_y;
+
+    if (pauseCtx->pageIndex != PAUSE_QUEST) {
+        //pauseCtx->itemPageVtx = GRAPH_ALLOC(MyTempGfxCtx, ((PAGE_BG_QUADS + VTX_PAGE_ITEM_QUADS) * 4) * sizeof(Vtx));
+        //KaleidoScope_SetPageVertices(MyTempPlay, pauseCtx->itemPageVtx, VTX_PAGE_ITEM, VTX_PAGE_ITEM_QUADS);
+
+        pauseCtx->itemVtx = GRAPH_ALLOC(MyTempGfxCtx, ((QUAD_ITEM_MAX + (ITEM_GRID_COLS*EXTRA_ITEM_ROWS)) * 4) * sizeof(Vtx));
+
+        // QUAD_ITEM_GRID_FIRST..QUAD_ITEM_GRID_LAST
+
+        // Loop over grid rows
+        for (k = 0, i = 0, vtx_y = (ITEM_GRID_ROWS * ITEM_GRID_CELL_HEIGHT) / 2 - 6; k < ITEM_GRID_ROWS+EXTRA_ITEM_ROWS;
+             k++, vtx_y -= ITEM_GRID_CELL_HEIGHT) {
+            // Loop over grid columns
+            for (vtx_x = 0 - (ITEM_GRID_COLS * ITEM_GRID_CELL_WIDTH) / 2, j = 0; j < ITEM_GRID_COLS;
+                 j++, i += 4, vtx_x += ITEM_GRID_CELL_WIDTH) {
+                pauseCtx->itemVtx[i + 0].v.ob[0] = pauseCtx->itemVtx[i + 2].v.ob[0] = vtx_x + ITEM_GRID_QUAD_MARGIN;
+                pauseCtx->itemVtx[i + 1].v.ob[0] = pauseCtx->itemVtx[i + 3].v.ob[0] =
+                    pauseCtx->itemVtx[i + 0].v.ob[0] + ITEM_GRID_QUAD_WIDTH;
+
+                pauseCtx->itemVtx[i + 0].v.ob[1] = pauseCtx->itemVtx[i + 1].v.ob[1] =
+                    vtx_y + pauseCtx->offsetY - ITEM_GRID_QUAD_MARGIN;
+                pauseCtx->itemVtx[i + 2].v.ob[1] = pauseCtx->itemVtx[i + 3].v.ob[1] =
+                    pauseCtx->itemVtx[i + 0].v.ob[1] - ITEM_GRID_QUAD_WIDTH;
+
+                pauseCtx->itemVtx[i + 0].v.ob[2] = pauseCtx->itemVtx[i + 1].v.ob[2] = pauseCtx->itemVtx[i + 2].v.ob[2] =
+                    pauseCtx->itemVtx[i + 3].v.ob[2] = 0;
+
+                pauseCtx->itemVtx[i + 0].v.flag = pauseCtx->itemVtx[i + 1].v.flag = pauseCtx->itemVtx[i + 2].v.flag =
+                    pauseCtx->itemVtx[i + 3].v.flag = 0;
+
+                pauseCtx->itemVtx[i + 0].v.tc[0] = pauseCtx->itemVtx[i + 0].v.tc[1] = pauseCtx->itemVtx[i + 1].v.tc[1] =
+                    pauseCtx->itemVtx[i + 2].v.tc[0] = 0;
+
+                pauseCtx->itemVtx[i + 1].v.tc[0] = pauseCtx->itemVtx[i + 2].v.tc[1] = pauseCtx->itemVtx[i + 3].v.tc[0] =
+                    pauseCtx->itemVtx[i + 3].v.tc[1] = ITEM_GRID_QUAD_TEX_SIZE * (1 << 5);
+
+                pauseCtx->itemVtx[i + 0].v.cn[0] = pauseCtx->itemVtx[i + 1].v.cn[0] = pauseCtx->itemVtx[i + 2].v.cn[0] =
+                    pauseCtx->itemVtx[i + 3].v.cn[0] = pauseCtx->itemVtx[i + 0].v.cn[1] =
+                        pauseCtx->itemVtx[i + 1].v.cn[1] = pauseCtx->itemVtx[i + 2].v.cn[1] =
+                            pauseCtx->itemVtx[i + 3].v.cn[1] = pauseCtx->itemVtx[i + 0].v.cn[2] =
+                                pauseCtx->itemVtx[i + 1].v.cn[2] = pauseCtx->itemVtx[i + 2].v.cn[2] =
+                                    pauseCtx->itemVtx[i + 3].v.cn[2] = 255;
+
+                pauseCtx->itemVtx[i + 0].v.cn[3] = pauseCtx->itemVtx[i + 1].v.cn[3] = pauseCtx->itemVtx[i + 2].v.cn[3] =
+                    pauseCtx->itemVtx[i + 3].v.cn[3] = 255;
+            }
+        }
+
+        for (j = EQUIP_SLOT_C_LEFT; j <= EQUIP_SLOT_C_RIGHT; j++, i += 4) {
+            s16 modSlot = GET_CUR_FORM_BTN_SLOT(j);
+
+            if (modSlot != ITEM_NONE && (modSlot < ITEM_NUM_SLOTS || modSlot >= MAX_REGULAR_SLOTS)) {
+                if (modSlot >= MAX_REGULAR_SLOTS)
+                    modSlot -= ITEM_NUM_SLOTS;
+                k = modSlot * 4;
+
+                pauseCtx->itemVtx[i + 0].v.ob[0] = pauseCtx->itemVtx[i + 2].v.ob[0] =
+                    pauseCtx->itemVtx[k].v.ob[0] + ITEM_GRID_SELECTED_QUAD_MARGIN;
+
+                pauseCtx->itemVtx[i + 1].v.ob[0] = pauseCtx->itemVtx[i + 3].v.ob[0] =
+                    pauseCtx->itemVtx[i + 0].v.ob[0] + ITEM_GRID_SELECTED_QUAD_WIDTH;
+
+                pauseCtx->itemVtx[i + 0].v.ob[1] = pauseCtx->itemVtx[i + 1].v.ob[1] =
+                    pauseCtx->itemVtx[k].v.ob[1] - ITEM_GRID_SELECTED_QUAD_MARGIN;
+
+                pauseCtx->itemVtx[i + 2].v.ob[1] = pauseCtx->itemVtx[i + 3].v.ob[1] =
+                    pauseCtx->itemVtx[i + 0].v.ob[1] - ITEM_GRID_SELECTED_QUAD_WIDTH;
+
+                pauseCtx->itemVtx[i + 0].v.ob[2] = pauseCtx->itemVtx[i + 1].v.ob[2] = pauseCtx->itemVtx[i + 2].v.ob[2] =
+                    pauseCtx->itemVtx[i + 3].v.ob[2] = 0;
+
+                pauseCtx->itemVtx[i + 0].v.flag = pauseCtx->itemVtx[i + 1].v.flag = pauseCtx->itemVtx[i + 2].v.flag =
+                    pauseCtx->itemVtx[i + 3].v.flag = 0;
+
+                pauseCtx->itemVtx[i + 0].v.tc[0] = pauseCtx->itemVtx[i + 0].v.tc[1] = pauseCtx->itemVtx[i + 1].v.tc[1] =
+                    pauseCtx->itemVtx[i + 2].v.tc[0] = 0;
+
+                pauseCtx->itemVtx[i + 1].v.tc[0] = pauseCtx->itemVtx[i + 2].v.tc[1] = pauseCtx->itemVtx[i + 3].v.tc[0] =
+                    pauseCtx->itemVtx[i + 3].v.tc[1] = ITEM_GRID_SELECTED_QUAD_TEX_SIZE * (1 << 5);
+
+                pauseCtx->itemVtx[i + 0].v.cn[0] = pauseCtx->itemVtx[i + 1].v.cn[0] = pauseCtx->itemVtx[i + 2].v.cn[0] =
+                    pauseCtx->itemVtx[i + 3].v.cn[0] = pauseCtx->itemVtx[i + 0].v.cn[1] =
+                        pauseCtx->itemVtx[i + 1].v.cn[1] = pauseCtx->itemVtx[i + 2].v.cn[1] =
+                            pauseCtx->itemVtx[i + 3].v.cn[1] = pauseCtx->itemVtx[i + 0].v.cn[2] =
+                                pauseCtx->itemVtx[i + 1].v.cn[2] = pauseCtx->itemVtx[i + 2].v.cn[2] =
+                                    pauseCtx->itemVtx[i + 3].v.cn[2] = 255;
+
+                pauseCtx->itemVtx[i + 0].v.cn[3] = pauseCtx->itemVtx[i + 1].v.cn[3] = pauseCtx->itemVtx[i + 2].v.cn[3] =
+                    pauseCtx->itemVtx[i + 3].v.cn[3] = pauseCtx->alpha;
+            } else {
+                // No item equipped on the C button, put the quad out of view
+
+                pauseCtx->itemVtx[i + 2].v.ob[0] = -300;
+                pauseCtx->itemVtx[i + 0].v.ob[0] = pauseCtx->itemVtx[i + 2].v.ob[0];
+
+                pauseCtx->itemVtx[i + 1].v.ob[0] = pauseCtx->itemVtx[i + 3].v.ob[0] =
+                    pauseCtx->itemVtx[i + 0].v.ob[0] + ITEM_GRID_SELECTED_QUAD_WIDTH;
+
+                pauseCtx->itemVtx[i + 0].v.ob[1] = pauseCtx->itemVtx[i + 1].v.ob[1] = 300;
+                pauseCtx->itemVtx[i + 2].v.ob[1] = pauseCtx->itemVtx[i + 3].v.ob[1] =
+                    pauseCtx->itemVtx[i + 0].v.ob[1] - ITEM_GRID_SELECTED_QUAD_HEIGHT;
+            }
+        }
+    }
+
+    //Stops extra items from repositioning the mask grid selection markers to undesirable positions
+    if (pauseCtx->pageIndex != PAUSE_MAP) {
+        i = MASK_NUM_SLOTS*4;
+        for (j = EQUIP_SLOT_C_LEFT; j <= EQUIP_SLOT_C_RIGHT; j++, i += 4) {
+            s16 modSlot = GET_CUR_FORM_BTN_SLOT(j);
+            if (modSlot != ITEM_NONE && modSlot >= MAX_REGULAR_SLOTS) {
+                pauseCtx->maskVtx[i + 2].v.ob[0] = -300;
+                pauseCtx->maskVtx[i + 0].v.ob[0] = pauseCtx->maskVtx[i + 2].v.ob[0];
+
+                pauseCtx->maskVtx[i + 1].v.ob[0] = pauseCtx->maskVtx[i + 3].v.ob[0] =
+                    pauseCtx->maskVtx[i + 0].v.ob[0] + MASK_GRID_SELECTED_QUAD_WIDTH;
+
+                pauseCtx->maskVtx[i + 0].v.ob[1] = pauseCtx->maskVtx[i + 1].v.ob[1] = 300;
+                pauseCtx->maskVtx[i + 2].v.ob[1] = pauseCtx->maskVtx[i + 3].v.ob[1] =
+                    pauseCtx->maskVtx[i + 0].v.ob[1] - MASK_GRID_SELECTED_QUAD_HEIGHT;
+            }
+        }
+    }
+}
+
