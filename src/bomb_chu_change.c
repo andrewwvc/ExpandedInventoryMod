@@ -528,8 +528,8 @@ void on_init() {
 void Core_Replace_Popup_Text(s16 newEntryNum, char* EZTR_text) {
     EZTR_Basic_ReplaceText(
         (0x1700+NEW_ACTION_ITEMS+newEntryNum),
-        EZTR_STANDARD_TEXT_BOX_I,
-        48,
+        EZTR_STANDARD_TEXT_BOX_II,
+        1,
         MESSAGE_ICON_NEW,
         EZTR_NO_VALUE,
         EZTR_NO_VALUE,
@@ -765,7 +765,6 @@ RECOMP_PATCH void Interface_DrawPauseMenuEquippingIcons(PlayState* play) {
                                 G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOMASK,
                                 G_TX_NOLOD, G_TX_NOLOD);
         } else {
-            recomp_printf("Interface_DrawPauseMenuEquippingIcons - New Item\n");
             // Normal Equip (icon goes from the inventory slot to the C button when equipping it)
             gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, pauseCtx->equipAnimAlpha);
             gSPVertex(OVERLAY_DISP++, &pauseCtx->cursorVtx[16], 4, 0);
@@ -783,6 +782,7 @@ RECOMP_PATCH void Interface_DrawPauseMenuEquippingIcons(PlayState* play) {
 //z_kaleido_item.c
 
 #define EXTRA_ITEM_ROWS 1
+#define ITEM_TOTAL_NUM_ROWS (ITEM_GRID_ROWS+EXTRA_ITEM_ROWS)
 #define ITEM_TOTAL_NUM_SLOTS (ITEM_NUM_SLOTS+(ITEM_GRID_COLS*EXTRA_ITEM_ROWS))
 
 extern s16 sMagicArrowEffectsR_ovl_kaleido_scope[];
@@ -863,14 +863,13 @@ RECOMP_PATCH void KaleidoScope_DrawItemSelect(PlayState* play) {
                 KaleidoScope_DrawTexQuadRGBA32(
                     play->state.gfxCtx, gItemIcons[((void)0, gSaveContext.save.saveInfo.inventory.items[i])], 32, 32, 0);
             } else {
-                //recomp_printf("KaleidoScope_DrawItemSelect - New Item\n");
                 KaleidoScope_DrawTexQuadRGBA32(
                     play->state.gfxCtx, gNewItemIcons[ItemExtension_ToNewItemRange(gSaveContext.save.saveInfo.inventory.items[i])], 32, 32, 0);
             }
         }
     }
 
-    for (; i < ITEM_TOTAL_NUM_SLOTS; i++, j += 4) {
+    for (; i < ITEM_TOTAL_NUM_SLOTS; i++, j += 4) {//Index starts from previous i,j values
         gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, 255, 255, 255, pauseCtx->alpha);
         s16 newItem = gNewInventoryItemSlots[i-ITEM_NUM_SLOTS];
         if (newItem != ITEM_NONE) {
@@ -1002,7 +1001,7 @@ void FinalizeKaleidoScope_SetVertices() {
 
             if (modSlot != ITEM_NONE && (modSlot < ITEM_NUM_SLOTS || modSlot >= MAX_REGULAR_SLOTS)) {
                 if (modSlot >= MAX_REGULAR_SLOTS)
-                    modSlot -= ITEM_NUM_SLOTS;
+                    modSlot -= MASK_NUM_SLOTS;
                 k = modSlot * 4;
 
                 pauseCtx->itemVtx[i + 0].v.ob[0] = pauseCtx->itemVtx[i + 2].v.ob[0] =
@@ -1074,3 +1073,394 @@ void FinalizeKaleidoScope_SetVertices() {
     }
 }
 
+#define STICK_MOVEMENT_THRESHOLD 30
+
+extern u8 sPlayerFormItems[];
+extern s16 sEquipMagicArrowSlotHoldTimer;
+extern s16 sEquipAnimTimer;
+
+s16 getItemFromFullInventoryPage(s16 inventoryPos) {
+    if (inventoryPos < ITEM_NUM_SLOTS)
+        return gSaveContext.save.saveInfo.inventory.items[inventoryPos];
+    else
+        return gNewInventoryItemSlots[inventoryPos-ITEM_NUM_SLOTS];
+}
+
+
+RECOMP_PATCH void KaleidoScope_UpdateItemCursor(PlayState* play) {
+    s32 pad1;
+    PauseContext* pauseCtx = &play->pauseCtx;
+    MessageContext* msgCtx = &play->msgCtx;
+    u16 vtxIndex;
+    u16 cursorItem;
+    u16 cursorSlot;
+    u8 magicArrowIndex;
+    s16 cursorPoint;
+    s16 cursorXIndex;
+    s16 cursorYIndex;
+    s16 oldCursorPoint;
+    s16 moveCursorResult;
+    s16 pad2;
+
+    pauseCtx->cursorColorSet = PAUSE_CURSOR_COLOR_SET_WHITE;
+    pauseCtx->nameColorSet = PAUSE_NAME_COLOR_SET_WHITE;
+
+    if ((pauseCtx->state == PAUSE_STATE_MAIN) && (pauseCtx->mainState == PAUSE_MAIN_STATE_IDLE) &&
+        (pauseCtx->pageIndex == PAUSE_ITEM) && !pauseCtx->itemDescriptionOn) {
+        moveCursorResult = PAUSE_CURSOR_RESULT_NONE;
+        oldCursorPoint = pauseCtx->cursorPoint[PAUSE_ITEM];
+
+        cursorItem = pauseCtx->cursorItem[PAUSE_ITEM];
+
+        // Move cursor left/right
+        if (pauseCtx->cursorSpecialPos == 0) {
+            // cursor is currently on a slot
+            pauseCtx->cursorColorSet = PAUSE_CURSOR_COLOR_SET_YELLOW;
+
+            if (ABS_ALT(pauseCtx->stickAdjX) > STICK_MOVEMENT_THRESHOLD) {
+                cursorPoint = pauseCtx->cursorPoint[PAUSE_ITEM];
+                cursorXIndex = pauseCtx->cursorXIndex[PAUSE_ITEM];
+                cursorYIndex = pauseCtx->cursorYIndex[PAUSE_ITEM];
+
+                // Search for slot to move to
+                while (moveCursorResult == PAUSE_CURSOR_RESULT_NONE) {
+                    if (pauseCtx->stickAdjX < -STICK_MOVEMENT_THRESHOLD) {
+                        // move cursor left
+                        pauseCtx->cursorShrinkRate = 4.0f;
+                        if (pauseCtx->cursorXIndex[PAUSE_ITEM] != 0) {
+                            pauseCtx->cursorXIndex[PAUSE_ITEM]--;
+                            pauseCtx->cursorPoint[PAUSE_ITEM]--;
+                            moveCursorResult = PAUSE_CURSOR_RESULT_SLOT;
+                        } else {
+                            pauseCtx->cursorXIndex[PAUSE_ITEM] = cursorXIndex;
+                            pauseCtx->cursorYIndex[PAUSE_ITEM]++;
+
+                            if (pauseCtx->cursorYIndex[PAUSE_ITEM] >= ITEM_TOTAL_NUM_ROWS) {
+                                pauseCtx->cursorYIndex[PAUSE_ITEM] = 0;
+                            }
+
+                            pauseCtx->cursorPoint[PAUSE_ITEM] =
+                                pauseCtx->cursorXIndex[PAUSE_ITEM] + (pauseCtx->cursorYIndex[PAUSE_ITEM] * ITEM_GRID_COLS);
+
+                            if (pauseCtx->cursorPoint[PAUSE_ITEM] >= ITEM_TOTAL_NUM_SLOTS) {
+                                pauseCtx->cursorPoint[PAUSE_ITEM] = pauseCtx->cursorXIndex[PAUSE_ITEM];
+                            }
+
+                            if (cursorYIndex == pauseCtx->cursorYIndex[PAUSE_ITEM]) {
+                                pauseCtx->cursorXIndex[PAUSE_ITEM] = cursorXIndex;
+                                pauseCtx->cursorPoint[PAUSE_ITEM] = cursorPoint;
+
+                                KaleidoScope_MoveCursorToSpecialPos(play, PAUSE_CURSOR_PAGE_LEFT);
+
+                                moveCursorResult = PAUSE_CURSOR_RESULT_SPECIAL_POS;
+                            }
+                        }
+                    } else if (pauseCtx->stickAdjX > STICK_MOVEMENT_THRESHOLD) {
+                        // move cursor right
+                        pauseCtx->cursorShrinkRate = 4.0f;
+                        if (pauseCtx->cursorXIndex[PAUSE_ITEM] <= ITEM_GRID_COLS-2) {
+                            pauseCtx->cursorXIndex[PAUSE_ITEM]++;
+                            pauseCtx->cursorPoint[PAUSE_ITEM]++;
+                            moveCursorResult = PAUSE_CURSOR_RESULT_SLOT;
+                        } else {
+                            pauseCtx->cursorXIndex[PAUSE_ITEM] = cursorXIndex;
+                            pauseCtx->cursorYIndex[PAUSE_ITEM]++;
+
+                            if (pauseCtx->cursorYIndex[PAUSE_ITEM] >= ITEM_TOTAL_NUM_ROWS) {
+                                pauseCtx->cursorYIndex[PAUSE_ITEM] = 0;
+                            }
+
+                            pauseCtx->cursorPoint[PAUSE_ITEM] =
+                                pauseCtx->cursorXIndex[PAUSE_ITEM] + (pauseCtx->cursorYIndex[PAUSE_ITEM] * ITEM_GRID_COLS);
+
+                            if (pauseCtx->cursorPoint[PAUSE_ITEM] >= ITEM_TOTAL_NUM_SLOTS) {
+                                pauseCtx->cursorPoint[PAUSE_ITEM] = pauseCtx->cursorXIndex[PAUSE_ITEM];
+                            }
+
+                            if (cursorYIndex == pauseCtx->cursorYIndex[PAUSE_ITEM]) {
+                                pauseCtx->cursorXIndex[PAUSE_ITEM] = cursorXIndex;
+                                pauseCtx->cursorPoint[PAUSE_ITEM] = cursorPoint;
+
+                                KaleidoScope_MoveCursorToSpecialPos(play, PAUSE_CURSOR_PAGE_RIGHT);
+
+                                moveCursorResult = PAUSE_CURSOR_RESULT_SPECIAL_POS;
+                            }
+                        }
+                    }
+                }
+
+                if (moveCursorResult == PAUSE_CURSOR_RESULT_SLOT) {
+                    cursorItem = getItemFromFullInventoryPage(pauseCtx->cursorPoint[PAUSE_ITEM]);
+                }
+            }
+        } else if (pauseCtx->cursorSpecialPos == PAUSE_CURSOR_PAGE_LEFT) {
+            if (pauseCtx->stickAdjX > STICK_MOVEMENT_THRESHOLD) {
+                KaleidoScope_MoveCursorFromSpecialPos(play);
+                cursorYIndex = 0;
+                cursorXIndex = 0;
+                cursorPoint = 0; // top row, left column (SLOT_OCARINA)
+
+                // Search for slot to move to
+                while (true) {
+                    // Check if current cursor has an item in its slot
+                    if (getItemFromFullInventoryPage(cursorPoint) != ITEM_NONE) {
+                        pauseCtx->cursorPoint[PAUSE_ITEM] = cursorPoint;
+                        pauseCtx->cursorXIndex[PAUSE_ITEM] = cursorXIndex;
+                        pauseCtx->cursorYIndex[PAUSE_ITEM] = cursorYIndex;
+                        moveCursorResult = PAUSE_CURSOR_RESULT_SLOT;
+                        break;
+                    }
+
+                    // move 1 row down and retry
+                    cursorYIndex++;
+                    cursorPoint += ITEM_GRID_COLS;
+                    if (cursorYIndex < ITEM_TOTAL_NUM_ROWS) {
+                        continue;
+                    }
+
+                    // move 1 column right and retry
+                    cursorYIndex = 0;
+                    cursorPoint = cursorXIndex + 1;
+                    cursorXIndex = cursorPoint;
+                    if (cursorXIndex < ITEM_GRID_COLS) {
+                        continue;
+                    }
+
+                    // No item available
+                    KaleidoScope_MoveCursorToSpecialPos(play, PAUSE_CURSOR_PAGE_RIGHT);
+                    break;
+                }
+            }
+        } else { // PAUSE_CURSOR_PAGE_RIGHT
+            if (pauseCtx->stickAdjX < -STICK_MOVEMENT_THRESHOLD) {
+                KaleidoScope_MoveCursorFromSpecialPos(play);
+                cursorXIndex = ITEM_GRID_COLS-1;
+                cursorPoint = ITEM_GRID_COLS-1; // top row, right columne (SLOT_TRADE_DEED)
+                cursorYIndex = 0;
+
+                // Search for slot to move to
+                while (true) {
+                    // Check if current cursor has an item in its slot
+                    if (getItemFromFullInventoryPage(cursorPoint) != ITEM_NONE) {
+                        pauseCtx->cursorPoint[PAUSE_ITEM] = cursorPoint;
+                        pauseCtx->cursorXIndex[PAUSE_ITEM] = cursorXIndex;
+                        pauseCtx->cursorYIndex[PAUSE_ITEM] = cursorYIndex;
+                        moveCursorResult = PAUSE_CURSOR_RESULT_SLOT;
+                        break;
+                    }
+
+                    // move 1 row down and retry
+                    cursorYIndex++;
+                    cursorPoint += ITEM_GRID_COLS;
+                    if (cursorYIndex < ITEM_TOTAL_NUM_ROWS) {
+                        continue;
+                    }
+
+                    // move 1 column left and retry
+                    cursorYIndex = 0;
+                    cursorPoint = cursorXIndex - 1;
+                    cursorXIndex = cursorPoint;
+                    if (cursorXIndex >= 0) {
+                        continue;
+                    }
+
+                    // No item available
+                    KaleidoScope_MoveCursorToSpecialPos(play, PAUSE_CURSOR_PAGE_LEFT);
+                    break;
+                }
+            }
+        }
+
+        if (pauseCtx->cursorSpecialPos == 0) {
+            // move cursor up/down
+            if (ABS_ALT(pauseCtx->stickAdjY) > STICK_MOVEMENT_THRESHOLD) {
+                moveCursorResult = PAUSE_CURSOR_RESULT_NONE;
+
+                cursorPoint = pauseCtx->cursorPoint[PAUSE_ITEM];
+                cursorYIndex = pauseCtx->cursorYIndex[PAUSE_ITEM];
+
+                while (moveCursorResult == PAUSE_CURSOR_RESULT_NONE) {
+                    if (pauseCtx->stickAdjY > STICK_MOVEMENT_THRESHOLD) {
+                        // move cursor up
+                        moveCursorResult = PAUSE_CURSOR_RESULT_SPECIAL_POS;
+                        if (pauseCtx->cursorYIndex[PAUSE_ITEM] != 0) {
+                            pauseCtx->cursorYIndex[PAUSE_ITEM]--;
+                            pauseCtx->cursorShrinkRate = 4.0f;
+                            pauseCtx->cursorPoint[PAUSE_ITEM] -= ITEM_GRID_COLS;
+                            moveCursorResult = PAUSE_CURSOR_RESULT_SLOT;
+                        } else {
+                            pauseCtx->cursorYIndex[PAUSE_ITEM] = cursorYIndex;
+                            pauseCtx->cursorPoint[PAUSE_ITEM] = cursorPoint;
+                        }
+                    } else if (pauseCtx->stickAdjY < -STICK_MOVEMENT_THRESHOLD) {
+                        // move cursor down
+                        moveCursorResult = PAUSE_CURSOR_RESULT_SPECIAL_POS;
+                        if (pauseCtx->cursorYIndex[PAUSE_ITEM] < ITEM_TOTAL_NUM_ROWS-1) {
+                            pauseCtx->cursorYIndex[PAUSE_ITEM]++;
+                            pauseCtx->cursorShrinkRate = 4.0f;
+                            pauseCtx->cursorPoint[PAUSE_ITEM] += ITEM_GRID_COLS;
+                            moveCursorResult = PAUSE_CURSOR_RESULT_SLOT;
+                        } else {
+                            pauseCtx->cursorYIndex[PAUSE_ITEM] = cursorYIndex;
+                            pauseCtx->cursorPoint[PAUSE_ITEM] = cursorPoint;
+                        }
+                    }
+                }
+            }
+
+            cursorSlot = pauseCtx->cursorPoint[PAUSE_ITEM];
+            pauseCtx->cursorColorSet = PAUSE_CURSOR_COLOR_SET_YELLOW;
+
+            if (moveCursorResult == PAUSE_CURSOR_RESULT_SLOT) {
+                cursorItem = getItemFromFullInventoryPage(pauseCtx->cursorPoint[PAUSE_ITEM]);
+            } else if (moveCursorResult != PAUSE_CURSOR_RESULT_SPECIAL_POS) {
+                cursorItem = getItemFromFullInventoryPage(pauseCtx->cursorPoint[PAUSE_ITEM]);
+            }
+
+            if (cursorItem == ITEM_NONE) {
+                cursorItem = PAUSE_ITEM_NONE;
+                pauseCtx->cursorColorSet = PAUSE_CURSOR_COLOR_SET_WHITE;
+            }
+
+            if ((cursorItem != (u32)PAUSE_ITEM_NONE) && (msgCtx->msgLength == 0)) {
+                if (gSaveContext.buttonStatus[EQUIP_SLOT_A] == BTN_DISABLED) {
+                    gSaveContext.buttonStatus[EQUIP_SLOT_A] = BTN_ENABLED;
+                    gSaveContext.hudVisibility = HUD_VISIBILITY_IDLE;
+                    Interface_SetHudVisibility(HUD_VISIBILITY_ALL);
+                }
+            } else if (gSaveContext.buttonStatus[EQUIP_SLOT_A] != BTN_DISABLED) {
+                gSaveContext.buttonStatus[EQUIP_SLOT_A] = BTN_DISABLED;
+                gSaveContext.hudVisibility = HUD_VISIBILITY_IDLE;
+                Interface_SetHudVisibility(HUD_VISIBILITY_ALL);
+            }
+
+            pauseCtx->cursorItem[PAUSE_ITEM] = cursorItem;
+            pauseCtx->cursorSlot[PAUSE_ITEM] = cursorSlot;
+            if (cursorItem != PAUSE_ITEM_NONE) {
+                // Equip item to the C buttons
+                if ((pauseCtx->debugEditor == DEBUG_EDITOR_NONE) && !pauseCtx->itemDescriptionOn &&
+                    (pauseCtx->state == PAUSE_STATE_MAIN) && (pauseCtx->mainState == PAUSE_MAIN_STATE_IDLE) &&
+                    CHECK_BTN_ANY(CONTROLLER1(&play->state)->press.button, BTN_CLEFT | BTN_CDOWN | BTN_CRIGHT)) {
+
+                    // Ensure that a transformation mask can not be unequipped while being used
+                    if (GET_PLAYER_FORM != PLAYER_FORM_HUMAN) {
+                        if (1) {}
+                        if (CHECK_BTN_ALL(CONTROLLER1(&play->state)->press.button, BTN_CLEFT)) {
+                            if (sPlayerFormItems[GET_PLAYER_FORM] == BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_C_LEFT)) {
+                                Audio_PlaySfx(NA_SE_SY_ERROR);
+                                return;
+                            }
+                        } else if (CHECK_BTN_ALL(CONTROLLER1(&play->state)->press.button, BTN_CDOWN)) {
+                            if (sPlayerFormItems[GET_PLAYER_FORM] == BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_C_DOWN)) {
+                                Audio_PlaySfx(NA_SE_SY_ERROR);
+                                return;
+                            }
+                        } else if (CHECK_BTN_ALL(CONTROLLER1(&play->state)->press.button, BTN_CRIGHT)) {
+                            if (sPlayerFormItems[GET_PLAYER_FORM] == BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_C_RIGHT)) {
+                                Audio_PlaySfx(NA_SE_SY_ERROR);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Ensure that a non-transformation mask can not be unequipped while being used
+                    if (CHECK_BTN_ALL(CONTROLLER1(&play->state)->press.button, BTN_CLEFT)) {
+                        if ((Player_GetCurMaskItemId(play) != ITEM_NONE) &&
+                            (Player_GetCurMaskItemId(play) == BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_C_LEFT))) {
+                            Audio_PlaySfx(NA_SE_SY_ERROR);
+                            return;
+                        }
+                        pauseCtx->equipTargetCBtn = PAUSE_EQUIP_C_LEFT;
+                    } else if (CHECK_BTN_ALL(CONTROLLER1(&play->state)->press.button, BTN_CDOWN)) {
+                        if ((Player_GetCurMaskItemId(play) != ITEM_NONE) &&
+                            (Player_GetCurMaskItemId(play) == BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_C_DOWN))) {
+                            Audio_PlaySfx(NA_SE_SY_ERROR);
+                            return;
+                        }
+                        pauseCtx->equipTargetCBtn = PAUSE_EQUIP_C_DOWN;
+                    } else if (CHECK_BTN_ALL(CONTROLLER1(&play->state)->press.button, BTN_CRIGHT)) {
+                        if ((Player_GetCurMaskItemId(play) != ITEM_NONE) &&
+                            (Player_GetCurMaskItemId(play) == BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_C_RIGHT))) {
+                            Audio_PlaySfx(NA_SE_SY_ERROR);
+                            return;
+                        }
+                        pauseCtx->equipTargetCBtn = PAUSE_EQUIP_C_RIGHT;
+                    }
+
+                    // Equip item to the C buttons
+                    pauseCtx->equipTargetItem = cursorItem;
+                    pauseCtx->equipTargetSlot = cursorSlot;
+                    if (pauseCtx->equipTargetSlot >= ITEM_NUM_SLOTS)
+                        pauseCtx->equipTargetSlot += MASK_NUM_SLOTS;
+                    pauseCtx->mainState = PAUSE_MAIN_STATE_EQUIP_ITEM;
+                    vtxIndex = cursorSlot * 4;
+                    pauseCtx->equipAnimX = pauseCtx->itemVtx[vtxIndex].v.ob[0] * 10;
+                    pauseCtx->equipAnimY = pauseCtx->itemVtx[vtxIndex].v.ob[1] * 10;
+                    pauseCtx->equipAnimAlpha = 255;
+                    sEquipMagicArrowSlotHoldTimer = 0;
+                    sEquipState = EQUIP_STATE_MOVE_TO_C_BTN;
+                    sEquipAnimTimer = 10;
+
+                    if ((pauseCtx->equipTargetItem == ITEM_ARROW_FIRE) ||
+                        (pauseCtx->equipTargetItem == ITEM_ARROW_ICE) ||
+                        (pauseCtx->equipTargetItem == ITEM_ARROW_LIGHT)) {
+                        magicArrowIndex = 0;
+                        if (pauseCtx->equipTargetItem == ITEM_ARROW_ICE) {
+                            magicArrowIndex = 1;
+                        }
+                        if (pauseCtx->equipTargetItem == ITEM_ARROW_LIGHT) {
+                            magicArrowIndex = 2;
+                        }
+                        Audio_PlaySfx(NA_SE_SY_SET_FIRE_ARROW + magicArrowIndex);
+                        pauseCtx->equipTargetItem = 0xB5 + magicArrowIndex;
+                        pauseCtx->equipAnimAlpha = sEquipState = 0; // EQUIP_STATE_MAGIC_ARROW_GROW_ORB
+                        sEquipAnimTimer = 6;
+                    } else {
+                        Audio_PlaySfx(NA_SE_SY_DECIDE);
+                    }
+                } else if ((pauseCtx->debugEditor == DEBUG_EDITOR_NONE) && (pauseCtx->state == PAUSE_STATE_MAIN) &&
+                           (pauseCtx->mainState == PAUSE_MAIN_STATE_IDLE) &&
+                           CHECK_BTN_ALL(CONTROLLER1(&play->state)->press.button, BTN_A) && (msgCtx->msgLength == 0)) {
+                    // Give description on item through a message box
+                    pauseCtx->itemDescriptionOn = true;
+                    if (pauseCtx->cursorYIndex[PAUSE_ITEM] < 2) {
+                        func_801514B0(play, 0x1700 + pauseCtx->cursorItem[PAUSE_ITEM], 3);
+                    } else {
+                        func_801514B0(play, 0x1700 + pauseCtx->cursorItem[PAUSE_ITEM], 1);
+                    }
+                }
+            }
+        } else {
+            pauseCtx->cursorItem[PAUSE_ITEM] = PAUSE_ITEM_NONE;
+        }
+
+        if (oldCursorPoint != pauseCtx->cursorPoint[PAUSE_ITEM]) {
+            Audio_PlaySfx(NA_SE_SY_CURSOR);
+        }
+    } else if ((pauseCtx->mainState == PAUSE_MAIN_STATE_EQUIP_ITEM) && (pauseCtx->pageIndex == PAUSE_ITEM)) {
+        pauseCtx->cursorColorSet = PAUSE_CURSOR_COLOR_SET_YELLOW;
+    }
+}
+
+extern f32 sItemMaskCursorsY[];
+static s16 MyTempCursorYIndex;
+
+RECOMP_HOOK("KaleidoScope_UpdateCursorSize")
+void Enter_KaleidoScope_UpdateCursorSize(PlayState* play) {
+    MyTempPlay = play;
+    PauseContext* pauseCtx = &play->pauseCtx;
+    if (pauseCtx->cursorSpecialPos == 0 && pauseCtx->pageIndex == PAUSE_ITEM) {
+        MyTempCursorYIndex = pauseCtx->cursorYIndex[PAUSE_ITEM];
+        pauseCtx->cursorYIndex[PAUSE_ITEM] = 3;
+        sItemMaskCursorsY[3] = 31.0f - (MyTempCursorYIndex*26.0f);
+    }
+}
+
+RECOMP_HOOK_RETURN("KaleidoScope_UpdateCursorSize")
+void Exit_KaleidoScope_UpdateCursorSize() {
+    PauseContext* pauseCtx = &MyTempPlay->pauseCtx;
+    if (pauseCtx->cursorSpecialPos == 0 && pauseCtx->pageIndex == PAUSE_ITEM) {
+        pauseCtx->cursorYIndex[PAUSE_ITEM] = MyTempCursorYIndex;
+        sItemMaskCursorsY[3] = -47.0f; // Row 4
+    }
+}
