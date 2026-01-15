@@ -516,7 +516,7 @@ CustomItemEntry bombmineEntry = {
         .initFunc = Player_InitNewExplosiveIA,
         .actionFunc = Player_UpperAction_NewCarryActor,
         .modelGroup = PLAYER_MODELGROUP_EXPLOSIVES,
-        .slotAssignment = MAX_REGULAR_SLOTS, //SLOT_LENS_OF_TRUTH,
+        .slotAssignment = SA_AUTO_PREFILL//MAX_REGULAR_SLOTS, //SLOT_LENS_OF_TRUTH,
     },
     .type = IT_EXPLOSIVE,
 };
@@ -578,11 +578,11 @@ void init_bombmine() {
 
 RECOMP_HOOK("Player_InitCommon") void setup_inventory(Player* this, PlayState* play, FlexSkeletonHeader* skelHeader) {
     if (sBombmineIN > -1) {
-        if (bombmineEntry.mujuraFuncs.slotAssignment >= 0 && bombmineEntry.mujuraFuncs.slotAssignment < SLOT_NONE) {
-            if (bombmineEntry.mujuraFuncs.slotAssignment < MAX_REGULAR_SLOTS)
-                gSaveContext.save.saveInfo.inventory.items[bombmineEntry.mujuraFuncs.slotAssignment] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
-            else
-                gNewInventoryItemSlots[bombmineEntry.mujuraFuncs.slotAssignment-MAX_REGULAR_SLOTS] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
+        if (sNewItemSlotAssignments[sBombmineIN] >= 0 && sNewItemSlotAssignments[sBombmineIN] < SLOT_NONE) {
+            if (sNewItemSlotAssignments[sBombmineIN] < MAX_REGULAR_SLOTS)
+                gSaveContext.save.saveInfo.inventory.items[sNewItemSlotAssignments[sBombmineIN]] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
+            else if (bombmineEntry.mujuraFuncs.slotAssignment == SA_AUTO_PREFILL)
+                gNewInventoryItemSlots[sNewItemSlotAssignments[sBombmineIN]-MAX_REGULAR_SLOTS] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
         }
 
         SET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_LEFT, ItemExtension_FromItemRangeToItemID(sBombmineIN));
@@ -781,7 +781,7 @@ RECOMP_PATCH void Interface_DrawPauseMenuEquippingIcons(PlayState* play) {
 
 //z_kaleido_item.c
 
-#define EXTRA_ITEM_ROWS 1
+#define EXTRA_ITEM_ROWS 4
 #define ITEM_TOTAL_NUM_ROWS (ITEM_GRID_ROWS+EXTRA_ITEM_ROWS)
 #define ITEM_TOTAL_NUM_SLOTS (ITEM_NUM_SLOTS+(ITEM_GRID_COLS*EXTRA_ITEM_ROWS))
 
@@ -932,7 +932,9 @@ RECOMP_PATCH void Kaleido_LoadItemNameStatic(void* segment, u32 texIndex) {
 }
 
 static PlayState* MyTempPlay;
+PauseContext* MyTempPauseCtx;
 static GraphicsContext* MyTempGfxCtx;
+#define ItemPageOffsetY (ITEM_GRID_CELL_HEIGHT*(pauseCtx->cursorYIndex[PAUSE_ITEM]<4?0:pauseCtx->cursorYIndex[PAUSE_ITEM]-3))
 
 RECOMP_HOOK("KaleidoScope_SetVertices")
 void SetupKaleidoScope_SetVertices(PlayState* play, GraphicsContext* gfxCtx) {
@@ -968,7 +970,7 @@ void FinalizeKaleidoScope_SetVertices() {
                     pauseCtx->itemVtx[i + 0].v.ob[0] + ITEM_GRID_QUAD_WIDTH;
 
                 pauseCtx->itemVtx[i + 0].v.ob[1] = pauseCtx->itemVtx[i + 1].v.ob[1] =
-                    vtx_y + pauseCtx->offsetY - ITEM_GRID_QUAD_MARGIN;
+                    vtx_y + pauseCtx->offsetY + ItemPageOffsetY - ITEM_GRID_QUAD_MARGIN;
                 pauseCtx->itemVtx[i + 2].v.ob[1] = pauseCtx->itemVtx[i + 3].v.ob[1] =
                     pauseCtx->itemVtx[i + 0].v.ob[1] - ITEM_GRID_QUAD_WIDTH;
 
@@ -1071,6 +1073,38 @@ void FinalizeKaleidoScope_SetVertices() {
             }
         }
     }
+}
+
+extern s16 sAmmoRectHeight[];
+static s16 MyTempOffsetY;
+static u16 MyTempAmmoIndex;
+
+RECOMP_HOOK("KaleidoScope_SetPageVertices")
+void SetupKaleidoScope_SetPageVertices(PlayState* play, Vtx* vtx, s16 vtxPage, s16 numQuads) {
+    PauseContext* pauseCtx = &play->pauseCtx;
+    MyTempPlay = play;
+    MyTempOffsetY = pauseCtx->offsetY;
+    if (vtxPage == VTX_PAGE_ITEM)
+        pauseCtx->offsetY += ItemPageOffsetY;
+}
+
+RECOMP_HOOK_RETURN("KaleidoScope_SetPageVertices")
+void FinalizeKaleidoScope_SetPageVertices() {
+    PauseContext* pauseCtx = &MyTempPlay->pauseCtx;
+    pauseCtx->offsetY = MyTempOffsetY;
+}
+
+RECOMP_HOOK("KaleidoScope_DrawAmmoCount")
+void SetupKaleidoScope_DrawAmmoCount(PauseContext* pauseCtx, GraphicsContext* gfxCtx, s16 item, u16 ammoIndex) {
+    MyTempPauseCtx = pauseCtx;
+    MyTempAmmoIndex = ammoIndex;
+    sAmmoRectHeight[ammoIndex] -= ItemPageOffsetY;
+}
+
+RECOMP_HOOK_RETURN("KaleidoScope_DrawAmmoCount")
+void FinalizeKaleidoScope_DrawAmmoCount() {
+    PauseContext* pauseCtx = MyTempPauseCtx;
+    sAmmoRectHeight[MyTempAmmoIndex] += ItemPageOffsetY;
 }
 
 #define STICK_MOVEMENT_THRESHOLD 30
@@ -1449,18 +1483,21 @@ RECOMP_HOOK("KaleidoScope_UpdateCursorSize")
 void Enter_KaleidoScope_UpdateCursorSize(PlayState* play) {
     MyTempPlay = play;
     PauseContext* pauseCtx = &play->pauseCtx;
-    if (pauseCtx->cursorSpecialPos == 0 && pauseCtx->pageIndex == PAUSE_ITEM) {
+    if (pauseCtx->cursorSpecialPos == 0 && pauseCtx->pageIndex == PAUSE_ITEM && pauseCtx->cursorYIndex[PAUSE_ITEM] > 3) {
         MyTempCursorYIndex = pauseCtx->cursorYIndex[PAUSE_ITEM];
         pauseCtx->cursorYIndex[PAUSE_ITEM] = 3;
-        sItemMaskCursorsY[3] = 31.0f - (MyTempCursorYIndex*26.0f);
+        //sItemMaskCursorsY[3] = 31.0f - (MyTempCursorYIndex*26.0f);
+    } else {
+        MyTempCursorYIndex = -1;
     }
 }
 
 RECOMP_HOOK_RETURN("KaleidoScope_UpdateCursorSize")
 void Exit_KaleidoScope_UpdateCursorSize() {
     PauseContext* pauseCtx = &MyTempPlay->pauseCtx;
-    if (pauseCtx->cursorSpecialPos == 0 && pauseCtx->pageIndex == PAUSE_ITEM) {
+    if (pauseCtx->cursorSpecialPos == 0 && pauseCtx->pageIndex == PAUSE_ITEM && MyTempCursorYIndex > 3) {
         pauseCtx->cursorYIndex[PAUSE_ITEM] = MyTempCursorYIndex;
-        sItemMaskCursorsY[3] = -47.0f; // Row 4
+        MyTempCursorYIndex = -1;
+        //sItemMaskCursorsY[3] = -47.0f; // Row 4
     }
 }
