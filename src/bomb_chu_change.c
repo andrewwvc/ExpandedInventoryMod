@@ -4,9 +4,12 @@
 #include "recompconfig.h"
 #include "eztr_api.h"
 
+//#include "overlays/actors/ovl_En_Box/z_en_box.h"
 #include "overlays/actors/ovl_En_Bom_Chu/z_en_bom_chu.h"
 #include "overlays/actors/ovl_En_Bom/z_en_bom.h"
 #include "overlays/actors/ovl_En_Boom/z_en_boom.h"
+
+#include "overlays/actors/ovl_En_Sellnuts/z_en_sellnuts.h"
 
 #include "overlays/kaleido_scope/ovl_kaleido_scope/z_kaleido_scope.h"
 
@@ -348,9 +351,33 @@ u64 gLand_mine_item_name_eng[] = {
 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000
 };
 
+typedef struct GetItemEntry {
+    /* 0x0 */ u8 itemId;
+    /* 0x1 */ u8 field; // various bit-packed data
+    /* 0x2 */ s8 gid;   // defines the draw id and chest opening animation
+    /* 0x3 */ u8 textId;
+    /* 0x4 */ u16 objectId;
+} GetItemEntry; // size = 0x6
+
 #define NewItemNum s16
 
 #define IDLE_ANIM_NONE 0
+#define CHEST_ANIM_SHORT 0
+#define CHEST_ANIM_LONG 1
+
+// TODO: consider what to do with the NONEs: cannot use a zero-argument macro like OoT since the text id is involved.
+#define GET_ITEM(itemId, objectId, drawId, textId, field, chestAnim) \
+    { itemId, field, (chestAnim != CHEST_ANIM_SHORT ? 1 : -1) * (drawId + 1), textId, objectId }
+
+#define GIFIELD_GET_DROP_TYPE(field) ((field)&0x1F)
+#define GIFIELD_20 (1 << 5)
+#define GIFIELD_40 (1 << 6)
+#define GIFIELD_NO_COLLECTIBLE (1 << 7)
+/**
+ * `flags` must be 0, GIFIELD_20, GIFIELD_40 or GIFIELD_NO_COLLECTIBLE (which can be or'ed together)
+ * `dropType` must be either a value from the `Item00Type` enum or 0 if the `GIFIELD_NO_COLLECTIBLE` flag was used
+ */
+#define GIFIELD(flags, dropType) ((flags) | (dropType))
 
 //This should be 0x50
 #define LAST_REGULAR_ACTION_ITEM ITEM_SWORD_DEITY
@@ -370,6 +397,7 @@ extern u8 sActionModelGroups[PLAYER_IA_MAX];
 extern s32 sPlayerUseHeldItem;
 extern s32 sPlayerHeldItemButtonIsHeldDown;
 extern PlayerAnimationHeader* D_8085BE84[PLAYER_ANIMGROUP_MAX][PLAYER_ANIMTYPE_MAX];
+extern GetItemEntry sGetItemTable[GI_MAX - 1];
 
 u16 currentNewItemTotal = 0;
 u16 currentNextFreeSlot = MAX_REGULAR_SLOTS;
@@ -516,7 +544,7 @@ CustomItemEntry bombmineEntry = {
         .initFunc = Player_InitNewExplosiveIA,
         .actionFunc = Player_UpperAction_NewCarryActor,
         .modelGroup = PLAYER_MODELGROUP_EXPLOSIVES,
-        .slotAssignment = SA_AUTO_PREFILL//MAX_REGULAR_SLOTS, //SLOT_LENS_OF_TRUTH,
+        .slotAssignment = SA_AUTO_EMPTY//MAX_REGULAR_SLOTS, //SLOT_LENS_OF_TRUTH,
     },
     .type = IT_EXPLOSIVE,
 };
@@ -539,6 +567,12 @@ void Core_Replace_Popup_Text(s16 newEntryNum, char* EZTR_text) {
         NULL
     );
 }
+
+//Get Item globals
+GetItemEntry gEntryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
+GetItemId gAlteredGI = GI_46; /*GI_MASK_CIRCUS_LEADER;*///GI_DEED_LAND;//
+
+void func_80ADBCE4(EnSellnuts* this, PlayState* play);
 
 NewItemNum InitializeNewItemFromEntry(CustomItemEntry* entry) {
     if (currentNewItemTotal >= NUM_NEW_ITEMS)
@@ -574,9 +608,18 @@ void init_bombmine() {
         gNewInventoryItemSlots[ii] = ITEM_NONE;
     }
     sBombmineIN = InitializeNewItemFromEntry(&bombmineEntry);
+    //gEntryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
+    //gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(sBombmineIN);
 }
 
 RECOMP_HOOK("Player_InitCommon") void setup_inventory(Player* this, PlayState* play, FlexSkeletonHeader* skelHeader) {
+    INV_CONTENT(ITEM_MOONS_TEAR) = ITEM_MOONS_TEAR;
+    //GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
+    recomp_printf("ItemTable- %d: %d\n", gAlteredGI-1,sGetItemTable[gAlteredGI-1].itemId);
+    // sGetItemTable[GI_DEED_LAND+1] = gEntryGI;
+    // sGetItemTable[GI_DEED_LAND] = gEntryGI;
+    // sGetItemTable[GI_DEED_LAND-1] = gEntryGI;
+    // recomp_printf("ItemTable- %d: %d\n", GI_DEED_LAND-1,sGetItemTable[GI_DEED_LAND-1].itemId);
     if (sBombmineIN > -1) {
         if (sNewItemSlotAssignments[sBombmineIN] >= 0 && sNewItemSlotAssignments[sBombmineIN] < SLOT_NONE) {
             if (sNewItemSlotAssignments[sBombmineIN] < MAX_REGULAR_SLOTS)
@@ -585,11 +628,675 @@ RECOMP_HOOK("Player_InitCommon") void setup_inventory(Player* this, PlayState* p
                 gNewInventoryItemSlots[sNewItemSlotAssignments[sBombmineIN]-MAX_REGULAR_SLOTS] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
         }
 
-        SET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_LEFT, ItemExtension_FromItemRangeToItemID(sBombmineIN));
-        SET_CUR_FORM_BTN_SLOT(EQUIP_SLOT_C_LEFT, sNewItemSlotAssignments[sBombmineIN]);
-        Interface_LoadItemIconImpl(play, EQUIP_SLOT_C_LEFT);
+        //SET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_LEFT, ItemExtension_FromItemRangeToItemID(sBombmineIN));
+        //SET_CUR_FORM_BTN_SLOT(EQUIP_SLOT_C_LEFT, sNewItemSlotAssignments[sBombmineIN]);
+        //Interface_LoadItemIconImpl(play, EQUIP_SLOT_C_LEFT);
     }
 }
+
+// RECOMP_HOOK("Player_UpdateCommon")
+// void Setup_Player_UpdateCommon(Player* this, PlayState* play, Input* input) {
+//     GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
+//     sGetItemTable[GI_DEED_LAND+1] = entryGI;
+// }
+
+s32 ItemExtension_OfferExtendedGetItem(Actor* actor, PlayState* play, s16 getItemIdEx) {
+    gEntryGI.itemId = getItemIdEx;
+    return Actor_OfferGetItem(actor, play, gAlteredGI, 9999.9f, 9999.9f);
+}
+
+s32 ItemExtension_OfferExtendedGetItemUnconditional(Actor* actor, PlayState* play, s16 getItemIdEx) {
+    GetItemId getItemId = gAlteredGI;
+    gEntryGI.itemId = getItemIdEx;
+    Player* player = GET_PLAYER(play);
+
+    if (!(player->stateFlags1 &
+          (PLAYER_STATE1_DEAD | PLAYER_STATE1_CHARGING_SPIN_ATTACK | PLAYER_STATE1_2000 | PLAYER_STATE1_4000 |
+           PLAYER_STATE1_40000 | PLAYER_STATE1_80000 | PLAYER_STATE1_100000 | PLAYER_STATE1_200000)) &&
+        (Player_GetExplosiveHeld(player) <= PLAYER_EXPLOSIVE_NONE)) {
+        s16 yawDiff = actor->yawTowardsPlayer - player->actor.shape.rot.y;
+        s32 absYawDiff = ABS_ALT(yawDiff);
+
+        if ((getItemId != GI_NONE) || (player->getItemDirection < absYawDiff)) {
+            player->getItemId = getItemId;
+            player->interactRangeActor = actor;
+            player->getItemDirection = absYawDiff;
+
+            if ((getItemId > GI_NONE) && (getItemId < GI_MAX)) {
+                CutsceneManager_Queue(play->playerCsIds[PLAYER_CS_ID_ITEM_GET]);
+            }
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+RECOMP_HOOK("func_8082ECE0")
+void Setup_func_8082ECE0(Player* this) {
+    // GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
+    sGetItemTable[gAlteredGI-1] = gEntryGI;
+}
+
+RECOMP_HOOK("Player_ActionHandler_2")
+void Setup_Player_ActionHandler_2(Player* this) {
+    // GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
+    sGetItemTable[gAlteredGI-1] = gEntryGI;
+}
+
+RECOMP_HOOK("func_808482E0")
+void Setup_func_808482E0(PlayState* play, Player* this) {
+    // GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
+    sGetItemTable[gAlteredGI-1] = gEntryGI;
+}
+
+RECOMP_HOOK("Player_Action_ExchangeItem")
+void Setup_Player_Action_ExchangeItem(Player* this, PlayState* play) {
+    // GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
+    sGetItemTable[gAlteredGI-1] = gEntryGI;
+}
+
+RECOMP_PATCH
+void func_80ADBBEC(EnSellnuts* this, PlayState* play) {
+    if (Actor_HasParent(&this->actor, play)) {
+        this->actor.parent = NULL;
+        SET_WEEKEVENTREG(WEEKEVENTREG_RECEIVED_LAND_TITLE_DEED);
+        this->actionFunc = func_80ADBCE4;
+    } else {
+        ItemExtension_OfferExtendedGetItemUnconditional(&this->actor, play, ItemExtension_FromItemRangeToItemID(sBombmineIN));
+    }
+}
+
+extern s16 sExtraItemBases[];
+extern s16 sAmmoRefillCounts[]; // Sticks, nuts, bombs
+extern s16 sArrowRefillCounts[];
+extern s16 sBombchuRefillCounts[];
+extern s16 sRupeeRefillCounts[];
+
+RECOMP_PATCH
+u8 Item_CheckObtainability(u8 item) {
+    if (ItemExtension_ToNewItemRange(item) >= 0)
+        return ITEM_NONE;
+
+    return Item_CheckObtainabilityImpl(item);
+}
+
+RECOMP_PATCH
+u8 Item_Give(PlayState* play, u8 item) {
+    Player* player = GET_PLAYER(play);
+    u8 i;
+    u8 temp;
+    u8 slot;
+
+        // if (item == ItemExtension_FromItemRangeToItemID(sBombmineIN)) {
+    //     gNewInventoryItemSlots[sNewItemSlotAssignments[sBombmineIN]-MAX_REGULAR_SLOTS] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
+    //     return ITEM_NONE;
+    // }
+    if (ItemExtension_ToNewItemRange(item) >= 0) {
+        slot = sNewItemSlotAssignments[ItemExtension_ToNewItemRange(item)];
+        if (slot != SLOT_NONE) {
+            if (slot < MAX_REGULAR_SLOTS)
+                gSaveContext.save.saveInfo.inventory.items[slot] = item;
+            else
+                gNewInventoryItemSlots[slot-MAX_REGULAR_SLOTS] = item;
+        }
+        return ITEM_NONE;
+    }
+
+    slot = SLOT(item);
+    if (item >= ITEM_DEKU_STICKS_5) {
+        slot = SLOT(sExtraItemBases[item - ITEM_DEKU_STICKS_5]);
+    }
+
+    if (item == ITEM_SKULL_TOKEN) {
+        //! @bug: Sets QUEST_QUIVER instead of QUEST_SKULL_TOKEN
+        // Setting `QUEST_SKULL_TOKEN` will result in misplaced digits on the pause menu - Quest Status page.
+        SET_QUEST_ITEM(item - ITEM_SKULL_TOKEN + QUEST_QUIVER);
+        Inventory_IncrementSkullTokenCount(play->sceneId);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_TINGLE_MAP) {
+        return ITEM_NONE;
+
+    } else if (item == ITEM_BOMBERS_NOTEBOOK) {
+        SET_QUEST_ITEM(QUEST_BOMBERS_NOTEBOOK);
+        return ITEM_NONE;
+
+    } else if ((item == ITEM_HEART_PIECE_2) || (item == ITEM_HEART_PIECE)) {
+        INCREMENT_QUEST_HEART_PIECE_COUNT;
+        if (EQ_MAX_QUEST_HEART_PIECE_COUNT) {
+            RESET_HEART_PIECE_COUNT;
+            gSaveContext.save.saveInfo.playerData.healthCapacity += 0x10;
+            gSaveContext.save.saveInfo.playerData.health += 0x10;
+        }
+        return ITEM_NONE;
+
+    } else if (item == ITEM_HEART_CONTAINER) {
+        gSaveContext.save.saveInfo.playerData.healthCapacity += 0x10;
+        gSaveContext.save.saveInfo.playerData.health += 0x10;
+        return ITEM_NONE;
+
+    } else if ((item >= ITEM_SONG_SONATA) && (item <= ITEM_SONG_LULLABY_INTRO)) {
+        SET_QUEST_ITEM(item - ITEM_SONG_SONATA + QUEST_SONG_SONATA);
+        return ITEM_NONE;
+
+    } else if ((item >= ITEM_SWORD_KOKIRI) && (item <= ITEM_SWORD_GILDED)) {
+        SET_EQUIP_VALUE(EQUIP_TYPE_SWORD, item - ITEM_SWORD_KOKIRI + EQUIP_VALUE_SWORD_KOKIRI);
+        CUR_FORM_EQUIP(EQUIP_SLOT_B) = item;
+        Interface_LoadItemIconImpl(play, EQUIP_SLOT_B);
+        if (item == ITEM_SWORD_RAZOR) {
+            gSaveContext.save.saveInfo.playerData.swordHealth = 100;
+        }
+        return ITEM_NONE;
+
+    } else if ((item >= ITEM_SHIELD_HERO) && (item <= ITEM_SHIELD_MIRROR)) {
+        if (GET_CUR_EQUIP_VALUE(EQUIP_TYPE_SHIELD) != (u16)(item - ITEM_SHIELD_HERO + EQUIP_VALUE_SHIELD_HERO)) {
+            SET_EQUIP_VALUE(EQUIP_TYPE_SHIELD, item - ITEM_SHIELD_HERO + EQUIP_VALUE_SHIELD_HERO);
+            Player_SetEquipmentData(play, player);
+            return ITEM_NONE;
+        }
+        return item;
+
+    } else if ((item == ITEM_KEY_BOSS) || (item == ITEM_COMPASS) || (item == ITEM_DUNGEON_MAP)) {
+        SET_DUNGEON_ITEM(item - ITEM_KEY_BOSS, gSaveContext.mapIndex);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_KEY_SMALL) {
+        if (DUNGEON_KEY_COUNT(gSaveContext.mapIndex) < 0) {
+            DUNGEON_KEY_COUNT(gSaveContext.mapIndex) = 1;
+            return ITEM_NONE;
+        } else {
+            DUNGEON_KEY_COUNT(gSaveContext.mapIndex)++;
+            return ITEM_NONE;
+        }
+
+    } else if ((item == ITEM_QUIVER_30) || (item == ITEM_BOW)) {
+        if (CUR_UPG_VALUE(UPG_QUIVER) == 0) {
+            Inventory_ChangeUpgrade(UPG_QUIVER, 1);
+            INV_CONTENT(ITEM_BOW) = ITEM_BOW;
+            AMMO(ITEM_BOW) = CAPACITY(UPG_QUIVER, 1);
+            return ITEM_NONE;
+        } else {
+            AMMO(ITEM_BOW)++;
+            if (AMMO(ITEM_BOW) > (s8)CUR_CAPACITY(UPG_QUIVER)) {
+                AMMO(ITEM_BOW) = CUR_CAPACITY(UPG_QUIVER);
+            }
+        }
+
+    } else if (item == ITEM_QUIVER_40) {
+        Inventory_ChangeUpgrade(UPG_QUIVER, 2);
+        INV_CONTENT(ITEM_BOW) = ITEM_BOW;
+        AMMO(ITEM_BOW) = CAPACITY(UPG_QUIVER, 2);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_QUIVER_50) {
+        Inventory_ChangeUpgrade(UPG_QUIVER, 3);
+        INV_CONTENT(ITEM_BOW) = ITEM_BOW;
+        AMMO(ITEM_BOW) = CAPACITY(UPG_QUIVER, 3);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_BOMB_BAG_20) {
+        if (CUR_UPG_VALUE(UPG_BOMB_BAG) == 0) {
+            Inventory_ChangeUpgrade(UPG_BOMB_BAG, 1);
+            INV_CONTENT(ITEM_BOMB) = ITEM_BOMB;
+            AMMO(ITEM_BOMB) = CAPACITY(UPG_BOMB_BAG, 1);
+            return ITEM_NONE;
+
+        } else {
+            AMMO(ITEM_BOMB)++;
+            if (AMMO(ITEM_BOMB) > CUR_CAPACITY(UPG_BOMB_BAG)) {
+                AMMO(ITEM_BOMB) = CUR_CAPACITY(UPG_BOMB_BAG);
+            }
+        }
+
+    } else if (item == ITEM_BOMB_BAG_30) {
+        Inventory_ChangeUpgrade(UPG_BOMB_BAG, 2);
+        INV_CONTENT(ITEM_BOMB) = ITEM_BOMB;
+        AMMO(ITEM_BOMB) = CAPACITY(UPG_BOMB_BAG, 2);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_BOMB_BAG_40) {
+        Inventory_ChangeUpgrade(UPG_BOMB_BAG, 3);
+        INV_CONTENT(ITEM_BOMB) = ITEM_BOMB;
+        AMMO(ITEM_BOMB) = CAPACITY(UPG_BOMB_BAG, 3);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_WALLET_ADULT) {
+        Inventory_ChangeUpgrade(UPG_WALLET, 1);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_WALLET_GIANT) {
+        Inventory_ChangeUpgrade(UPG_WALLET, 2);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_DEKU_STICK_UPGRADE_20) {
+        if (INV_CONTENT(ITEM_DEKU_STICK) != ITEM_DEKU_STICK) {
+            INV_CONTENT(ITEM_DEKU_STICK) = ITEM_DEKU_STICK;
+        }
+        Inventory_ChangeUpgrade(UPG_DEKU_STICKS, 2);
+        AMMO(ITEM_DEKU_STICK) = CAPACITY(UPG_DEKU_STICKS, 2);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_DEKU_STICK_UPGRADE_30) {
+        if (INV_CONTENT(ITEM_DEKU_STICK) != ITEM_DEKU_STICK) {
+            INV_CONTENT(ITEM_DEKU_STICK) = ITEM_DEKU_STICK;
+        }
+        Inventory_ChangeUpgrade(UPG_DEKU_STICKS, 3);
+        AMMO(ITEM_DEKU_STICK) = CAPACITY(UPG_DEKU_STICKS, 3);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_DEKU_NUT_UPGRADE_30) {
+        if (INV_CONTENT(ITEM_DEKU_NUT) != ITEM_DEKU_NUT) {
+            INV_CONTENT(ITEM_DEKU_NUT) = ITEM_DEKU_NUT;
+        }
+        Inventory_ChangeUpgrade(UPG_DEKU_NUTS, 2);
+        AMMO(ITEM_DEKU_NUT) = CAPACITY(UPG_DEKU_NUTS, 2);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_DEKU_NUT_UPGRADE_40) {
+        if (INV_CONTENT(ITEM_DEKU_NUT) != ITEM_DEKU_NUT) {
+            INV_CONTENT(ITEM_DEKU_NUT) = ITEM_DEKU_NUT;
+        }
+        Inventory_ChangeUpgrade(UPG_DEKU_NUTS, 3);
+        AMMO(ITEM_DEKU_NUT) = CAPACITY(UPG_DEKU_NUTS, 3);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_DEKU_STICK) {
+        if (INV_CONTENT(ITEM_DEKU_STICK) != ITEM_DEKU_STICK) {
+            Inventory_ChangeUpgrade(UPG_DEKU_STICKS, 1);
+            AMMO(ITEM_DEKU_STICK) = 1;
+        } else {
+            AMMO(ITEM_DEKU_STICK)++;
+            if (AMMO(ITEM_DEKU_STICK) > CUR_CAPACITY(UPG_DEKU_STICKS)) {
+                AMMO(ITEM_DEKU_STICK) = CUR_CAPACITY(UPG_DEKU_STICKS);
+            }
+        }
+
+    } else if ((item == ITEM_DEKU_STICKS_5) || (item == ITEM_DEKU_STICKS_10)) {
+        if (INV_CONTENT(ITEM_DEKU_STICK) != ITEM_DEKU_STICK) {
+            Inventory_ChangeUpgrade(UPG_DEKU_STICKS, 1);
+            AMMO(ITEM_DEKU_STICK) = sAmmoRefillCounts[item - ITEM_DEKU_STICKS_5];
+        } else {
+            AMMO(ITEM_DEKU_STICK) += sAmmoRefillCounts[item - ITEM_DEKU_STICKS_5];
+            if (AMMO(ITEM_DEKU_STICK) > CUR_CAPACITY(UPG_DEKU_STICKS)) {
+                AMMO(ITEM_DEKU_STICK) = CUR_CAPACITY(UPG_DEKU_STICKS);
+            }
+        }
+
+        item = ITEM_DEKU_STICK;
+
+    } else if (item == ITEM_DEKU_NUT) {
+        if (INV_CONTENT(ITEM_DEKU_NUT) != ITEM_DEKU_NUT) {
+            Inventory_ChangeUpgrade(UPG_DEKU_NUTS, 1);
+            AMMO(ITEM_DEKU_NUT) = 1;
+        } else {
+            AMMO(ITEM_DEKU_NUT)++;
+            if (AMMO(ITEM_DEKU_NUT) > CUR_CAPACITY(UPG_DEKU_NUTS)) {
+                AMMO(ITEM_DEKU_NUT) = CUR_CAPACITY(UPG_DEKU_NUTS);
+            }
+        }
+
+    } else if ((item == ITEM_DEKU_NUTS_5) || (item == ITEM_DEKU_NUTS_10)) {
+        if (INV_CONTENT(ITEM_DEKU_NUT) != ITEM_DEKU_NUT) {
+            Inventory_ChangeUpgrade(UPG_DEKU_NUTS, 1);
+            AMMO(ITEM_DEKU_NUT) += sAmmoRefillCounts[item - ITEM_DEKU_NUTS_5];
+        } else {
+            AMMO(ITEM_DEKU_NUT) += sAmmoRefillCounts[item - ITEM_DEKU_NUTS_5];
+            if (AMMO(ITEM_DEKU_NUT) > CUR_CAPACITY(UPG_DEKU_NUTS)) {
+                AMMO(ITEM_DEKU_NUT) = CUR_CAPACITY(UPG_DEKU_NUTS);
+            }
+        }
+        item = ITEM_DEKU_NUT;
+
+    } else if (item == ITEM_POWDER_KEG) {
+        if (INV_CONTENT(ITEM_POWDER_KEG) != ITEM_POWDER_KEG) {
+            INV_CONTENT(ITEM_POWDER_KEG) = ITEM_POWDER_KEG;
+        }
+
+        AMMO(ITEM_POWDER_KEG) = 1;
+        return ITEM_NONE;
+
+    } else if (item == ITEM_BOMB) {
+        if ((AMMO(ITEM_BOMB) += 1) > CUR_CAPACITY(UPG_BOMB_BAG)) {
+            AMMO(ITEM_BOMB) = CUR_CAPACITY(UPG_BOMB_BAG);
+        }
+        return ITEM_NONE;
+
+    } else if ((item >= ITEM_BOMBS_5) && (item <= ITEM_BOMBS_30)) {
+        if (gSaveContext.save.saveInfo.inventory.items[SLOT_BOMB] != ITEM_BOMB) {
+            INV_CONTENT(ITEM_BOMB) = ITEM_BOMB;
+            AMMO(ITEM_BOMB) += sAmmoRefillCounts[item - ITEM_BOMBS_5];
+            return ITEM_NONE;
+        }
+
+        if ((AMMO(ITEM_BOMB) += sAmmoRefillCounts[item - ITEM_BOMBS_5]) > CUR_CAPACITY(UPG_BOMB_BAG)) {
+            AMMO(ITEM_BOMB) = CUR_CAPACITY(UPG_BOMB_BAG);
+        }
+        return ITEM_NONE;
+
+    } else if (item == ITEM_BOMBCHU) {
+        if (INV_CONTENT(ITEM_BOMBCHU) != ITEM_BOMBCHU) {
+            INV_CONTENT(ITEM_BOMBCHU) = ITEM_BOMBCHU;
+            AMMO(ITEM_BOMBCHU) = 10;
+            return ITEM_NONE;
+        }
+        if ((AMMO(ITEM_BOMBCHU) += 10) > CUR_CAPACITY(UPG_BOMB_BAG)) {
+            AMMO(ITEM_BOMBCHU) = CUR_CAPACITY(UPG_BOMB_BAG);
+        }
+        return ITEM_NONE;
+
+    } else if ((item >= ITEM_BOMBCHUS_20) && (item <= ITEM_BOMBCHUS_5)) {
+        if (gSaveContext.save.saveInfo.inventory.items[SLOT_BOMBCHU] != ITEM_BOMBCHU) {
+            INV_CONTENT(ITEM_BOMBCHU) = ITEM_BOMBCHU;
+            AMMO(ITEM_BOMBCHU) += sBombchuRefillCounts[item - ITEM_BOMBCHUS_20];
+
+            if (AMMO(ITEM_BOMBCHU) > CUR_CAPACITY(UPG_BOMB_BAG)) {
+                AMMO(ITEM_BOMBCHU) = CUR_CAPACITY(UPG_BOMB_BAG);
+            }
+            return ITEM_NONE;
+        }
+
+        if ((AMMO(ITEM_BOMBCHU) += sBombchuRefillCounts[item - ITEM_BOMBCHUS_20]) > CUR_CAPACITY(UPG_BOMB_BAG)) {
+            AMMO(ITEM_BOMBCHU) = CUR_CAPACITY(UPG_BOMB_BAG);
+        }
+        return ITEM_NONE;
+
+    } else if ((item >= ITEM_ARROWS_10) && (item <= ITEM_ARROWS_50)) {
+        AMMO(ITEM_BOW) += sArrowRefillCounts[item - ITEM_ARROWS_10];
+
+        if ((AMMO(ITEM_BOW) >= CUR_CAPACITY(UPG_QUIVER)) || (AMMO(ITEM_BOW) < 0)) {
+            AMMO(ITEM_BOW) = CUR_CAPACITY(UPG_QUIVER);
+        }
+        return ITEM_BOW;
+
+    } else if (item == ITEM_OCARINA_OF_TIME) {
+        INV_CONTENT(ITEM_OCARINA_OF_TIME) = ITEM_OCARINA_OF_TIME;
+        return ITEM_NONE;
+
+    } else if (item == ITEM_MAGIC_BEANS) {
+        if (INV_CONTENT(ITEM_MAGIC_BEANS) == ITEM_NONE) {
+            INV_CONTENT(item) = item;
+            AMMO(ITEM_MAGIC_BEANS) = 1;
+        } else if (AMMO(ITEM_MAGIC_BEANS) < 20) {
+            AMMO(ITEM_MAGIC_BEANS)++;
+        } else {
+            AMMO(ITEM_MAGIC_BEANS) = 20;
+        }
+        return ITEM_NONE;
+
+    } else if ((item >= ITEM_REMAINS_ODOLWA) && (item <= ITEM_REMAINS_TWINMOLD)) {
+        SET_QUEST_ITEM(item - ITEM_REMAINS_ODOLWA + QUEST_REMAINS_ODOLWA);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_RECOVERY_HEART) {
+        Health_ChangeBy(play, 0x10);
+        return item;
+
+    } else if (item == ITEM_MAGIC_JAR_SMALL) {
+        Magic_Add(play, MAGIC_NORMAL_METER / 2);
+        if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_12_80)) {
+            SET_WEEKEVENTREG(WEEKEVENTREG_12_80);
+            return ITEM_NONE;
+        }
+        return item;
+
+    } else if (item == ITEM_MAGIC_JAR_BIG) {
+        Magic_Add(play, MAGIC_NORMAL_METER);
+        if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_12_80)) {
+            SET_WEEKEVENTREG(WEEKEVENTREG_12_80);
+            return ITEM_NONE;
+        }
+        return item;
+
+    } else if ((item >= ITEM_RUPEE_GREEN) && (item <= ITEM_RUPEE_HUGE)) {
+        Rupees_ChangeBy(sRupeeRefillCounts[item - ITEM_RUPEE_GREEN]);
+        return ITEM_NONE;
+
+    } else if (item == ITEM_LONGSHOT) {
+        slot = SLOT(item);
+
+        for (i = BOTTLE_FIRST; i < BOTTLE_MAX; i++) {
+            if (gSaveContext.save.saveInfo.inventory.items[slot + i] == ITEM_NONE) {
+                gSaveContext.save.saveInfo.inventory.items[slot + i] = ITEM_POTION_RED;
+                return ITEM_NONE;
+            }
+        }
+        return item;
+
+    } else if ((item == ITEM_MILK_BOTTLE) || (item == ITEM_POE) || (item == ITEM_GOLD_DUST) || (item == ITEM_CHATEAU) ||
+               (item == ITEM_HYLIAN_LOACH)) {
+        slot = SLOT(item);
+
+        for (i = BOTTLE_FIRST; i < BOTTLE_MAX; i++) {
+            if (gSaveContext.save.saveInfo.inventory.items[slot + i] == ITEM_NONE) {
+                gSaveContext.save.saveInfo.inventory.items[slot + i] = item;
+                return ITEM_NONE;
+            }
+        }
+        return item;
+
+    } else if (item == ITEM_BOTTLE) {
+        slot = SLOT(item);
+
+        for (i = BOTTLE_FIRST; i < BOTTLE_MAX; i++) {
+            if (gSaveContext.save.saveInfo.inventory.items[slot + i] == ITEM_NONE) {
+                gSaveContext.save.saveInfo.inventory.items[slot + i] = item;
+                return ITEM_NONE;
+            }
+        }
+        return item;
+
+    } else if (((item >= ITEM_POTION_RED) && (item <= ITEM_OBABA_DRINK)) || (item == ITEM_CHATEAU_2) ||
+               (item == ITEM_MILK) || (item == ITEM_GOLD_DUST_2) || (item == ITEM_HYLIAN_LOACH_2) ||
+               (item == ITEM_SEAHORSE_CAUGHT)) {
+        slot = SLOT(item);
+
+        if ((item != ITEM_MILK_BOTTLE) && (item != ITEM_MILK_HALF)) {
+            if (item == ITEM_CHATEAU_2) {
+                item = ITEM_CHATEAU;
+
+            } else if (item == ITEM_MILK) {
+                item = ITEM_MILK_BOTTLE;
+
+            } else if (item == ITEM_GOLD_DUST_2) {
+                item = ITEM_GOLD_DUST;
+
+            } else if (item == ITEM_HYLIAN_LOACH_2) {
+                item = ITEM_HYLIAN_LOACH;
+
+            } else if (item == ITEM_SEAHORSE_CAUGHT) {
+                item = ITEM_SEAHORSE;
+            }
+            slot = SLOT(item);
+
+            for (i = BOTTLE_FIRST; i < BOTTLE_MAX; i++) {
+                if (gSaveContext.save.saveInfo.inventory.items[slot + i] == ITEM_BOTTLE) {
+                    if (item == ITEM_HOT_SPRING_WATER) {
+                        Interface_StartBottleTimer(60, i);
+                    }
+
+                    if ((slot + i) == C_SLOT_EQUIP(0, EQUIP_SLOT_C_LEFT)) {
+                        BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_C_LEFT) = item;
+                        Interface_LoadItemIconImpl(play, EQUIP_SLOT_C_LEFT);
+                        gSaveContext.buttonStatus[EQUIP_SLOT_C_LEFT] = BTN_ENABLED;
+                    } else if ((slot + i) == C_SLOT_EQUIP(0, EQUIP_SLOT_C_DOWN)) {
+                        BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_C_DOWN) = item;
+                        Interface_LoadItemIconImpl(play, EQUIP_SLOT_C_DOWN);
+                        gSaveContext.buttonStatus[EQUIP_SLOT_C_DOWN] = BTN_ENABLED;
+                    } else if ((slot + i) == C_SLOT_EQUIP(0, EQUIP_SLOT_C_RIGHT)) {
+                        BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_C_RIGHT) = item;
+                        Interface_LoadItemIconImpl(play, EQUIP_SLOT_C_RIGHT);
+                        gSaveContext.buttonStatus[EQUIP_SLOT_C_RIGHT] = BTN_ENABLED;
+                    }
+
+                    gSaveContext.save.saveInfo.inventory.items[slot + i] = item;
+                    return ITEM_NONE;
+                }
+            }
+        } else {
+            for (i = BOTTLE_FIRST; i < BOTTLE_MAX; i++) {
+                if (gSaveContext.save.saveInfo.inventory.items[slot + i] == ITEM_NONE) {
+                    gSaveContext.save.saveInfo.inventory.items[slot + i] = item;
+                    return ITEM_NONE;
+                }
+            }
+        }
+
+    } else if ((item >= ITEM_MOONS_TEAR) && (item <= ITEM_MASK_GIANT)) {
+        temp = INV_CONTENT(item);
+        INV_CONTENT(item) = item;
+        if ((item >= ITEM_MOONS_TEAR) && (item <= ITEM_PENDANT_OF_MEMORIES) && (temp != ITEM_NONE)) {
+            for (i = EQUIP_SLOT_C_LEFT; i <= EQUIP_SLOT_C_RIGHT; i++) {
+                if (temp == GET_CUR_FORM_BTN_ITEM(i)) {
+                    SET_CUR_FORM_BTN_ITEM(i, item);
+                    Interface_LoadItemIconImpl(play, i);
+                    return ITEM_NONE;
+                }
+            }
+        }
+        return ITEM_NONE;
+    }
+
+    temp = gSaveContext.save.saveInfo.inventory.items[slot];
+    INV_CONTENT(item) = item;
+    return temp;
+}
+
+// Player_UpdateCurrentGetItemDrawId?
+// RECOMP_PATCH
+// void func_8082ECE0(Player* this) {
+//     //GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
+//     //sGetItemTable[this->getItemId - 1] = entryGI;
+//     GetItemEntry* giEntry = &sGetItemTable[this->getItemId - 1];
+//     recomp_printf("ItemTable-func_8082ECE0- ID: %d, GI-1: %d, LD-1: %d\n", giEntry->itemId, this->getItemId - 1, sGetItemTable[GI_DEED_LAND-1].itemId);
+//
+//     this->getItemDrawIdPlusOne = ABS_ALT(giEntry->gid);
+// }
+
+// void func_80837C78(PlayState* play, Player* this);
+// void func_808379C0(PlayState* play, Player* this);
+// extern PlayerAnimationHeader* gPlayerAnim_pn_getB;
+// extern PlayerAnimationHeader* gPlayerAnim_link_demo_get_itemB;
+// extern PlayerAnimationHeader* gPlayerAnim_link_normal_box_kick;
+// extern Input* sPlayerControlInput;
+//
+//
+// RECOMP_PATCH
+// s32 Player_ActionHandler_2(Player* this, PlayState* play) {
+//     if (gSaveContext.save.saveInfo.playerData.health != 0) {
+//         Actor* interactRangeActor = this->interactRangeActor;
+//
+//         if (interactRangeActor != NULL) {
+//             if (this->getItemId > GI_NONE) {
+//                 if (this->getItemId < GI_MAX) {
+//                     GetItemEntry* giEntry = &sGetItemTable[this->getItemId - 1];
+//
+//                     interactRangeActor->parent = &this->actor;
+//                     if ((Item_CheckObtainability(giEntry->itemId) == ITEM_NONE) ||
+//                         ((s16)giEntry->objectId == OBJECT_GI_BOMB_2)) {
+//                         Player_DetachHeldActor(play, this);
+//                         func_80838830(this, giEntry->objectId);
+//
+//                         if (!(this->stateFlags2 & PLAYER_STATE2_400) ||
+//                             (this->currentBoots == PLAYER_BOOTS_ZORA_UNDERWATER)) {
+//                             Player_StopCutscene(this);
+//                             Player_SetupWaitForPutAwayWithCs(play, this, func_80837C78,
+//                                                              play->playerCsIds[PLAYER_CS_ID_ITEM_GET]);
+//                             Player_Anim_PlayOnceAdjusted(play, this,
+//                                                          (this->transformation == PLAYER_FORM_DEKU)
+//                                                              ? &gPlayerAnim_pn_getB
+//                                                              : &gPlayerAnim_link_demo_get_itemB);
+//                         }
+//
+//                         this->stateFlags1 |=
+//                             (PLAYER_STATE1_400 | PLAYER_STATE1_CARRYING_ACTOR | PLAYER_STATE1_20000000);
+//                         func_8082DAD4(this);
+//
+//                         return true;
+//                     }
+//
+//                     func_8083D168(play, this, giEntry);
+//                     this->getItemId = GI_NONE;
+//                 }
+//             } else if (this->csAction == PLAYER_CSACTION_NONE) {
+//                 if (!(this->stateFlags1 & PLAYER_STATE1_CARRYING_ACTOR)) {
+//                     if (this->getItemId != GI_NONE) {
+//                         if (CHECK_BTN_ALL(sPlayerControlInput->press.button, BTN_A)) {
+//                             GetItemEntry* giEntry = &sGetItemTable[-this->getItemId - 1];
+//                             EnBox* chest = (EnBox*)interactRangeActor;
+//
+//                             if ((giEntry->itemId != ITEM_NONE) &&
+//                                 (((Item_CheckObtainability(giEntry->itemId) == ITEM_NONE) &&
+//                                   (giEntry->field & GIFIELD_40)) ||
+//                                  (((Item_CheckObtainability(giEntry->itemId) != ITEM_NONE)) &&
+//                                   (giEntry->field & GIFIELD_20)))) {
+//                                 this->getItemId =
+//                                     (giEntry->itemId == ITEM_MASK_CAPTAIN) ? -GI_RECOVERY_HEART : -GI_RUPEE_BLUE;
+//                                 giEntry = &sGetItemTable[-this->getItemId - 1];
+//                             }
+//
+//                             Player_SetupWaitForPutAway(play, this, func_80837C78);
+//                             this->stateFlags1 |=
+//                                 (PLAYER_STATE1_400 | PLAYER_STATE1_CARRYING_ACTOR | PLAYER_STATE1_20000000);
+//                             func_80838830(this, giEntry->objectId);
+//
+//                             this->actor.world.pos.x =
+//                                 interactRangeActor->world.pos.x -
+//                                 (Math_SinS(interactRangeActor->shape.rot.y) * this->ageProperties->unk_9C);
+//                             this->actor.world.pos.z =
+//                                 interactRangeActor->world.pos.z -
+//                                 (Math_CosS(interactRangeActor->shape.rot.y) * this->ageProperties->unk_9C);
+//                             this->actor.world.pos.y = interactRangeActor->world.pos.y;
+//                             this->yaw = this->actor.shape.rot.y = interactRangeActor->shape.rot.y;
+//
+//                             func_8082DAD4(this);
+//                             if ((giEntry->itemId != ITEM_NONE) && (giEntry->gid >= 0) &&
+//                                 (Item_CheckObtainability(giEntry->itemId) == ITEM_NONE)) {
+//                                 this->csId = chest->csId2;
+//                                 Player_Anim_PlayOnceAdjusted(play, this, this->ageProperties->openChestAnim);
+//                                 Player_AnimReplace_Setup(play, this,
+//                                                          ANIM_FLAG_1 | ANIM_FLAG_UPDATE_Y | ANIM_FLAG_4 |
+//                                                              ANIM_FLAG_ENABLE_MOVEMENT | ANIM_FLAG_NOMOVE |
+//                                                              ANIM_FLAG_80);
+//                                 this->actor.bgCheckFlags &= ~BGCHECKFLAG_WATER;
+//                                 chest->unk_1EC = 1;
+//                             } else {
+//                                 Player_Anim_PlayOnce(play, this, &gPlayerAnim_link_normal_box_kick);
+//                                 chest->unk_1EC = -1;
+//                             }
+//
+//                             return true;
+//                         }
+//                     } else if (!(this->stateFlags1 & PLAYER_STATE1_8000000) &&
+//                                (this->transformation != PLAYER_FORM_DEKU)) {
+//                         if ((this->heldActor == NULL) || Player_IsHoldingHookshot(this)) {
+//                             EnBom* bomb = (EnBom*)interactRangeActor;
+//
+//                             if (((this->transformation != PLAYER_FORM_GORON) &&
+//                                  (((bomb->actor.id == ACTOR_EN_BOM) && bomb->isPowderKeg) ||
+//                                   ((interactRangeActor->id == ACTOR_EN_ISHI) && (interactRangeActor->params & 1)) ||
+//                                   (interactRangeActor->id == ACTOR_EN_MM)))) {
+//                                 return false;
+//                             }
+//
+//                             this->stateFlags2 |= PLAYER_STATE2_10000;
+//                             if (CHECK_BTN_ALL(sPlayerControlInput->press.button, BTN_A)) {
+//                                 Player_SetupWaitForPutAway(play, this, func_808379C0);
+//                                 func_8082DAD4(this);
+//                                 this->stateFlags1 |= PLAYER_STATE1_CARRYING_ACTOR;
+//
+//                                 return true;
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//
+//     return false;
+// }
 
 PlayerItemAction getUpdatedItemAction(ItemId item) {
     recomp_printf("getUpdatedItemId: %d\n", item);
