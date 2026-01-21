@@ -9,7 +9,7 @@
 #include "overlays/actors/ovl_En_Bom/z_en_bom.h"
 #include "overlays/actors/ovl_En_Boom/z_en_boom.h"
 
-#include "overlays/actors/ovl_En_Sellnuts/z_en_sellnuts.h"
+#include "assets/objects/object_gi_insect/object_gi_insect.h"
 
 #include "overlays/kaleido_scope/ovl_kaleido_scope/z_kaleido_scope.h"
 
@@ -378,6 +378,8 @@ typedef struct GetItemEntry {
  * `dropType` must be either a value from the `Item00Type` enum or 0 if the `GIFIELD_NO_COLLECTIBLE` flag was used
  */
 #define GIFIELD(flags, dropType) ((flags) | (dropType))
+#define GI_START_TEXT 0xCE
+#define GID_CUSTOM GID_4C
 
 //This should be 0x50
 #define LAST_REGULAR_ACTION_ITEM ITEM_SWORD_DEITY
@@ -398,6 +400,7 @@ extern s32 sPlayerUseHeldItem;
 extern s32 sPlayerHeldItemButtonIsHeldDown;
 extern PlayerAnimationHeader* D_8085BE84[PLAYER_ANIMGROUP_MAX][PLAYER_ANIMTYPE_MAX];
 extern GetItemEntry sGetItemTable[GI_MAX - 1];
+extern DrawItemTableEntry sDrawItemTable[];
 
 u16 currentNewItemTotal = 0;
 u16 currentNextFreeSlot = MAX_REGULAR_SLOTS;
@@ -409,6 +412,7 @@ TexturePtr gNewItemNames[NUM_NEW_ITEMS];
 u8 sNewActionModelGroups[NUM_NEW_ITEMS];
 u8 sNewItemSlotAssignments[NUM_NEW_ITEMS];
 s16 gNewInventoryItemSlots[NUM_NEW_ITEMS];
+CustomItemEntry gCustomItemEntries[NUM_NEW_ITEMS];
 
 NewItemNum sBombmineIN = -1;
 
@@ -531,15 +535,44 @@ RECOMP_HOOK_RETURN("Message_LoadItemIcon") void FinalizeMessage_LoadItemIcon() {
         msgCtx->unk12010 = (msgCtx->unk11FF8 - D_801CFF70[gSaveContext.options.language]);
         msgCtx->unk12012 = (MyTempArg2 + 6);
         msgCtx->unk12014 = 0x20;
-        memcpy(msgCtx->textboxSegment + 0x1000, gNewItemIcons[ItemExtension_ToNewItemRange(msgCtx->currentTextId-0x1700)], ICON_ITEM_TEX_SIZE);
+        if (msgCtx->currentTextId < 0x1700)
+            memcpy(msgCtx->textboxSegment + 0x1000, gNewItemIcons[msgCtx->currentTextId-GI_START_TEXT], ICON_ITEM_TEX_SIZE);
+        else
+            memcpy(msgCtx->textboxSegment + 0x1000, gNewItemIcons[ItemExtension_ToNewItemRange(msgCtx->currentTextId-0x1700)], ICON_ITEM_TEX_SIZE);
+
     }
 }
+
+void GetItem_DrawMyStuff(PlayState* play, s16 drawId) {
+    s32 pad;
+
+    OPEN_DISPS(play->state.gfxCtx);
+
+    Gfx_SetupDL25_Opa(play->state.gfxCtx);
+
+    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
+    gSPDisplayList(POLY_OPA_DISP++, gGiBugContainerContentsDL);
+
+    Gfx_SetupDL25_Xlu(play->state.gfxCtx);
+
+    MATRIX_FINALIZE_AND_LOAD(POLY_XLU_DISP++, play->state.gfxCtx);
+    gSPDisplayList(POLY_XLU_DISP++, gGiBugContainerGlassDL);
+
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+DrawItemTableEntry customDrawEntry = {
+    GetItem_DrawMyStuff,
+    { NULL }
+};
 
 CustomItemEntry bombmineEntry = {
     .itemName = "BombMine",
     .icon = gLand_mine_icon,
     .nameLabelEng = gLand_mine_item_name_eng,
     .EZTR_KaleidoPopupText = "A bomb with custom behaviour!" EZTR_CC_NEWLINE "Explodes in place, so run" EZTR_CC_NEWLINE "away!" EZTR_CC_END,
+    .EZTR_GiveItemText = "A bomb won't move!" EZTR_CC_NEWLINE "Explodes in place, so have" EZTR_CC_NEWLINE "fun!" EZTR_CC_END,
+    .drawEntryGI = &customDrawEntry,//&sDrawItemTable[GID_BUG],
     .mujuraFuncs = {
         .initFunc = Player_InitNewExplosiveIA,
         .actionFunc = Player_UpperAction_NewCarryActor,
@@ -568,16 +601,30 @@ void Core_Replace_Popup_Text(s16 newEntryNum, char* EZTR_text) {
     );
 }
 
-//Get Item globals
-GetItemEntry gEntryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
-GetItemId gAlteredGI = GI_46; /*GI_MASK_CIRCUS_LEADER;*///GI_DEED_LAND;//
+void Core_Replace_Get_Text(s16 newEntryNum, char* EZTR_text) {
+    EZTR_Basic_ReplaceText(
+        (GI_START_TEXT+newEntryNum),
+        EZTR_STANDARD_TEXT_BOX_II,
+        1,
+        MESSAGE_ICON_NEW,
+        EZTR_NO_VALUE,
+        EZTR_NO_VALUE,
+        EZTR_NO_VALUE,
+        true,
+        EZTR_text,
+        NULL
+    );
+}
 
-void func_80ADBCE4(EnSellnuts* this, PlayState* play);
+//Get Item globals
+GetItemEntry gEntryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E , GIFIELD(GIFIELD_20 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_LONG);
+GetItemId gAlteredGI = GI_46; /*GI_MASK_CIRCUS_LEADER;*///GI_DEED_LAND;//
 
 NewItemNum InitializeNewItemFromEntry(CustomItemEntry* entry) {
     if (currentNewItemTotal >= NUM_NEW_ITEMS)
         return -1;
 
+    gCustomItemEntries[currentNewItemTotal] = *entry;
     gNewItemActions[currentNewItemTotal] = NEW_ACTION_NUMBERS+currentNewItemTotal;
     gNewItemActionInitFuncs[currentNewItemTotal] = entry->mujuraFuncs.initFunc;
     gNewItemActionUpdateFuncs[currentNewItemTotal] = entry->mujuraFuncs.actionFunc;
@@ -591,6 +638,7 @@ NewItemNum InitializeNewItemFromEntry(CustomItemEntry* entry) {
     else
         sNewItemSlotAssignments[currentNewItemTotal] = SLOT_NONE;
     Core_Replace_Popup_Text(currentNewItemTotal, entry->EZTR_KaleidoPopupText);
+    Core_Replace_Get_Text(currentNewItemTotal, entry->EZTR_GiveItemText);
 
     return currentNewItemTotal++;
 }
@@ -613,7 +661,11 @@ void init_bombmine() {
 }
 
 RECOMP_HOOK("Player_InitCommon") void setup_inventory(Player* this, PlayState* play, FlexSkeletonHeader* skelHeader) {
+    //////// REMOVE THESE ON RELEASE
     INV_CONTENT(ITEM_MOONS_TEAR) = ITEM_MOONS_TEAR;
+    INV_CONTENT(ITEM_MASK_BREMEN) = ITEM_NONE;
+    CLEAR_WEEKEVENTREG(WEEKEVENTREG_38_40);
+    /////////
     //GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
     recomp_printf("ItemTable- %d: %d\n", gAlteredGI-1,sGetItemTable[gAlteredGI-1].itemId);
     // sGetItemTable[GI_DEED_LAND+1] = gEntryGI;
@@ -634,20 +686,30 @@ RECOMP_HOOK("Player_InitCommon") void setup_inventory(Player* this, PlayState* p
     }
 }
 
-// RECOMP_HOOK("Player_UpdateCommon")
-// void Setup_Player_UpdateCommon(Player* this, PlayState* play, Input* input) {
-//     GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
-//     sGetItemTable[GI_DEED_LAND+1] = entryGI;
-// }
+s32 ItemExtension_OfferExtendedGetItem(Actor* actor, PlayState* play, s16 getItemIdEx, f32 xzRange, f32 yRange) {
+    gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(getItemIdEx);
+    gEntryGI.textId = GI_START_TEXT+getItemIdEx;
+    gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0;
+    gEntryGI.gid = GID_CUSTOM;
+    sDrawItemTable[GID_CUSTOM] = *gCustomItemEntries[getItemIdEx].drawEntryGI;
+    //sDrawItemTable[GID_CUSTOM].drawResources[0] = gGiBugContainerContentsDL;
+    //sDrawItemTable[GID_CUSTOM].drawResources[1] = gGiBugContainerGlassDL;
+    return Actor_OfferGetItem(actor, play, gAlteredGI, xzRange, yRange);
+}
 
-s32 ItemExtension_OfferExtendedGetItem(Actor* actor, PlayState* play, s16 getItemIdEx) {
-    gEntryGI.itemId = getItemIdEx;
-    return Actor_OfferGetItem(actor, play, gAlteredGI, 9999.9f, 9999.9f);
+s32 ItemExtension_OfferExtendedGetItemFar(Actor* actor, PlayState* play, s16 getItemIdEx) {
+    return ItemExtension_OfferExtendedGetItem(actor, play, gAlteredGI, 9999.9f, 9999.9f);
 }
 
 s32 ItemExtension_OfferExtendedGetItemUnconditional(Actor* actor, PlayState* play, s16 getItemIdEx) {
     GetItemId getItemId = gAlteredGI;
-    gEntryGI.itemId = getItemIdEx;
+    gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(getItemIdEx);
+    gEntryGI.textId = GI_START_TEXT+getItemIdEx;
+    gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0;
+    gEntryGI.gid = GID_CUSTOM;
+    sDrawItemTable[GID_CUSTOM] = *gCustomItemEntries[getItemIdEx].drawEntryGI;
+    //sDrawItemTable[GID_CUSTOM].drawResources[0] = gGiBugContainerContentsDL;
+    //sDrawItemTable[GID_CUSTOM].drawResources[1] = gGiBugContainerGlassDL;
     Player* player = GET_PLAYER(play);
 
     if (!(player->stateFlags1 &
@@ -697,6 +759,13 @@ void Setup_Player_Action_ExchangeItem(Player* this, PlayState* play) {
     sGetItemTable[gAlteredGI-1] = gEntryGI;
 }
 
+//////// REMOVE THESE ON RELEASE
+#include "overlays/actors/ovl_En_Guruguru/z_en_guruguru.h"
+#include "overlays/actors/ovl_En_Sellnuts/z_en_sellnuts.h"
+extern u16 textIDs[];
+void func_80BC7520(EnGuruguru* this, PlayState* play);
+void func_80ADBCE4(EnSellnuts* this, PlayState* play);
+
 RECOMP_PATCH
 void func_80ADBBEC(EnSellnuts* this, PlayState* play) {
     if (Actor_HasParent(&this->actor, play)) {
@@ -704,9 +773,27 @@ void func_80ADBBEC(EnSellnuts* this, PlayState* play) {
         SET_WEEKEVENTREG(WEEKEVENTREG_RECEIVED_LAND_TITLE_DEED);
         this->actionFunc = func_80ADBCE4;
     } else {
-        ItemExtension_OfferExtendedGetItemUnconditional(&this->actor, play, ItemExtension_FromItemRangeToItemID(sBombmineIN));
+        ItemExtension_OfferExtendedGetItemUnconditional(&this->actor, play, sBombmineIN);
     }
 }
+
+RECOMP_PATCH
+void func_80BC7440(EnGuruguru* this, PlayState* play) {
+    SkelAnime_Update(&this->skelAnime);
+    if (Actor_HasParent(&this->actor, play)) {
+        this->actor.parent = NULL;
+        this->textIdIndex++;
+        this->actor.textId = textIDs[this->textIdIndex];
+        Audio_MuteSeqPlayerBgmSub(true);
+        Actor_OfferTalkExchange(&this->actor, play, 400.0f, 400.0f, PLAYER_IA_MINUS1);
+        this->unk268 = 0;
+        SET_WEEKEVENTREG(WEEKEVENTREG_38_40);
+        this->actionFunc = func_80BC7520;
+    } else {
+        ItemExtension_OfferExtendedGetItemFar(&this->actor, play, sBombmineIN);
+    }
+}
+/////////
 
 extern s16 sExtraItemBases[];
 extern s16 sAmmoRefillCounts[]; // Sticks, nuts, bombs
@@ -729,10 +816,6 @@ u8 Item_Give(PlayState* play, u8 item) {
     u8 temp;
     u8 slot;
 
-        // if (item == ItemExtension_FromItemRangeToItemID(sBombmineIN)) {
-    //     gNewInventoryItemSlots[sNewItemSlotAssignments[sBombmineIN]-MAX_REGULAR_SLOTS] = ItemExtension_FromItemRangeToItemID(sBombmineIN);
-    //     return ITEM_NONE;
-    // }
     if (ItemExtension_ToNewItemRange(item) >= 0) {
         slot = sNewItemSlotAssignments[ItemExtension_ToNewItemRange(item)];
         if (slot != SLOT_NONE) {
@@ -1162,141 +1245,6 @@ u8 Item_Give(PlayState* play, u8 item) {
     INV_CONTENT(item) = item;
     return temp;
 }
-
-// Player_UpdateCurrentGetItemDrawId?
-// RECOMP_PATCH
-// void func_8082ECE0(Player* this) {
-//     //GetItemEntry entryGI = GET_ITEM(ITEM_BOMBCHUS_20, OBJECT_GI_BOMB_2, GID_BOMBCHU, 0x2E, GIFIELD(GIFIELD_40 | GIFIELD_NO_COLLECTIBLE, 0), CHEST_ANIM_SHORT);
-//     //sGetItemTable[this->getItemId - 1] = entryGI;
-//     GetItemEntry* giEntry = &sGetItemTable[this->getItemId - 1];
-//     recomp_printf("ItemTable-func_8082ECE0- ID: %d, GI-1: %d, LD-1: %d\n", giEntry->itemId, this->getItemId - 1, sGetItemTable[GI_DEED_LAND-1].itemId);
-//
-//     this->getItemDrawIdPlusOne = ABS_ALT(giEntry->gid);
-// }
-
-// void func_80837C78(PlayState* play, Player* this);
-// void func_808379C0(PlayState* play, Player* this);
-// extern PlayerAnimationHeader* gPlayerAnim_pn_getB;
-// extern PlayerAnimationHeader* gPlayerAnim_link_demo_get_itemB;
-// extern PlayerAnimationHeader* gPlayerAnim_link_normal_box_kick;
-// extern Input* sPlayerControlInput;
-//
-//
-// RECOMP_PATCH
-// s32 Player_ActionHandler_2(Player* this, PlayState* play) {
-//     if (gSaveContext.save.saveInfo.playerData.health != 0) {
-//         Actor* interactRangeActor = this->interactRangeActor;
-//
-//         if (interactRangeActor != NULL) {
-//             if (this->getItemId > GI_NONE) {
-//                 if (this->getItemId < GI_MAX) {
-//                     GetItemEntry* giEntry = &sGetItemTable[this->getItemId - 1];
-//
-//                     interactRangeActor->parent = &this->actor;
-//                     if ((Item_CheckObtainability(giEntry->itemId) == ITEM_NONE) ||
-//                         ((s16)giEntry->objectId == OBJECT_GI_BOMB_2)) {
-//                         Player_DetachHeldActor(play, this);
-//                         func_80838830(this, giEntry->objectId);
-//
-//                         if (!(this->stateFlags2 & PLAYER_STATE2_400) ||
-//                             (this->currentBoots == PLAYER_BOOTS_ZORA_UNDERWATER)) {
-//                             Player_StopCutscene(this);
-//                             Player_SetupWaitForPutAwayWithCs(play, this, func_80837C78,
-//                                                              play->playerCsIds[PLAYER_CS_ID_ITEM_GET]);
-//                             Player_Anim_PlayOnceAdjusted(play, this,
-//                                                          (this->transformation == PLAYER_FORM_DEKU)
-//                                                              ? &gPlayerAnim_pn_getB
-//                                                              : &gPlayerAnim_link_demo_get_itemB);
-//                         }
-//
-//                         this->stateFlags1 |=
-//                             (PLAYER_STATE1_400 | PLAYER_STATE1_CARRYING_ACTOR | PLAYER_STATE1_20000000);
-//                         func_8082DAD4(this);
-//
-//                         return true;
-//                     }
-//
-//                     func_8083D168(play, this, giEntry);
-//                     this->getItemId = GI_NONE;
-//                 }
-//             } else if (this->csAction == PLAYER_CSACTION_NONE) {
-//                 if (!(this->stateFlags1 & PLAYER_STATE1_CARRYING_ACTOR)) {
-//                     if (this->getItemId != GI_NONE) {
-//                         if (CHECK_BTN_ALL(sPlayerControlInput->press.button, BTN_A)) {
-//                             GetItemEntry* giEntry = &sGetItemTable[-this->getItemId - 1];
-//                             EnBox* chest = (EnBox*)interactRangeActor;
-//
-//                             if ((giEntry->itemId != ITEM_NONE) &&
-//                                 (((Item_CheckObtainability(giEntry->itemId) == ITEM_NONE) &&
-//                                   (giEntry->field & GIFIELD_40)) ||
-//                                  (((Item_CheckObtainability(giEntry->itemId) != ITEM_NONE)) &&
-//                                   (giEntry->field & GIFIELD_20)))) {
-//                                 this->getItemId =
-//                                     (giEntry->itemId == ITEM_MASK_CAPTAIN) ? -GI_RECOVERY_HEART : -GI_RUPEE_BLUE;
-//                                 giEntry = &sGetItemTable[-this->getItemId - 1];
-//                             }
-//
-//                             Player_SetupWaitForPutAway(play, this, func_80837C78);
-//                             this->stateFlags1 |=
-//                                 (PLAYER_STATE1_400 | PLAYER_STATE1_CARRYING_ACTOR | PLAYER_STATE1_20000000);
-//                             func_80838830(this, giEntry->objectId);
-//
-//                             this->actor.world.pos.x =
-//                                 interactRangeActor->world.pos.x -
-//                                 (Math_SinS(interactRangeActor->shape.rot.y) * this->ageProperties->unk_9C);
-//                             this->actor.world.pos.z =
-//                                 interactRangeActor->world.pos.z -
-//                                 (Math_CosS(interactRangeActor->shape.rot.y) * this->ageProperties->unk_9C);
-//                             this->actor.world.pos.y = interactRangeActor->world.pos.y;
-//                             this->yaw = this->actor.shape.rot.y = interactRangeActor->shape.rot.y;
-//
-//                             func_8082DAD4(this);
-//                             if ((giEntry->itemId != ITEM_NONE) && (giEntry->gid >= 0) &&
-//                                 (Item_CheckObtainability(giEntry->itemId) == ITEM_NONE)) {
-//                                 this->csId = chest->csId2;
-//                                 Player_Anim_PlayOnceAdjusted(play, this, this->ageProperties->openChestAnim);
-//                                 Player_AnimReplace_Setup(play, this,
-//                                                          ANIM_FLAG_1 | ANIM_FLAG_UPDATE_Y | ANIM_FLAG_4 |
-//                                                              ANIM_FLAG_ENABLE_MOVEMENT | ANIM_FLAG_NOMOVE |
-//                                                              ANIM_FLAG_80);
-//                                 this->actor.bgCheckFlags &= ~BGCHECKFLAG_WATER;
-//                                 chest->unk_1EC = 1;
-//                             } else {
-//                                 Player_Anim_PlayOnce(play, this, &gPlayerAnim_link_normal_box_kick);
-//                                 chest->unk_1EC = -1;
-//                             }
-//
-//                             return true;
-//                         }
-//                     } else if (!(this->stateFlags1 & PLAYER_STATE1_8000000) &&
-//                                (this->transformation != PLAYER_FORM_DEKU)) {
-//                         if ((this->heldActor == NULL) || Player_IsHoldingHookshot(this)) {
-//                             EnBom* bomb = (EnBom*)interactRangeActor;
-//
-//                             if (((this->transformation != PLAYER_FORM_GORON) &&
-//                                  (((bomb->actor.id == ACTOR_EN_BOM) && bomb->isPowderKeg) ||
-//                                   ((interactRangeActor->id == ACTOR_EN_ISHI) && (interactRangeActor->params & 1)) ||
-//                                   (interactRangeActor->id == ACTOR_EN_MM)))) {
-//                                 return false;
-//                             }
-//
-//                             this->stateFlags2 |= PLAYER_STATE2_10000;
-//                             if (CHECK_BTN_ALL(sPlayerControlInput->press.button, BTN_A)) {
-//                                 Player_SetupWaitForPutAway(play, this, func_808379C0);
-//                                 func_8082DAD4(this);
-//                                 this->stateFlags1 |= PLAYER_STATE1_CARRYING_ACTOR;
-//
-//                                 return true;
-//                             }
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//     }
-//
-//     return false;
-// }
 
 PlayerItemAction getUpdatedItemAction(ItemId item) {
     recomp_printf("getUpdatedItemId: %d\n", item);
