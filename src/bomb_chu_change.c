@@ -4,12 +4,12 @@
 #include "recompconfig.h"
 #include "eztr_api.h"
 
-//#include "overlays/actors/ovl_En_Box/z_en_box.h"
+#include "overlays/actors/ovl_En_Box/z_en_box.h"
 #include "overlays/actors/ovl_En_Bom_Chu/z_en_bom_chu.h"
 #include "overlays/actors/ovl_En_Bom/z_en_bom.h"
 #include "overlays/actors/ovl_En_Boom/z_en_boom.h"
 
-#include "assets/objects/object_gi_insect/object_gi_insect.h"
+#include "object_gi_insect_custom.h"
 
 #include "overlays/kaleido_scope/ovl_kaleido_scope/z_kaleido_scope.h"
 
@@ -551,12 +551,12 @@ void GetItem_DrawMyStuff(PlayState* play, s16 drawId) {
     Gfx_SetupDL25_Opa(play->state.gfxCtx);
 
     MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
-    gSPDisplayList(POLY_OPA_DISP++, gGiBugContainerContentsDL);
+    gSPDisplayList(POLY_OPA_DISP++, gGiBugContainerContentsCustomDL);
 
     Gfx_SetupDL25_Xlu(play->state.gfxCtx);
 
     MATRIX_FINALIZE_AND_LOAD(POLY_XLU_DISP++, play->state.gfxCtx);
-    gSPDisplayList(POLY_XLU_DISP++, gGiBugContainerGlassDL);
+    gSPDisplayList(POLY_XLU_DISP++, gGiBugContainerGlassCustomDL);
 
     CLOSE_DISPS(play->state.gfxCtx);
 }
@@ -571,7 +571,7 @@ CustomItemEntry bombmineEntry = {
     .icon = gLand_mine_icon,
     .nameLabelEng = gLand_mine_item_name_eng,
     .EZTR_KaleidoPopupText = "A bomb with custom behaviour!" EZTR_CC_NEWLINE "Explodes in place, so run" EZTR_CC_NEWLINE "away!" EZTR_CC_END,
-    .EZTR_GiveItemText = "A bomb won't move!" EZTR_CC_NEWLINE "Explodes in place, so have" EZTR_CC_NEWLINE "fun!" EZTR_CC_END,
+    .EZTR_GiveItemText = "A bomb that won't move!" EZTR_CC_NEWLINE "Explodes in place, so have" EZTR_CC_NEWLINE "fun!" EZTR_CC_END,
     .drawEntryGI = &customDrawEntry,//&sDrawItemTable[GID_BUG],
     .mujuraFuncs = {
         .initFunc = Player_InitNewExplosiveIA,
@@ -689,7 +689,7 @@ RECOMP_HOOK("Player_InitCommon") void setup_inventory(Player* this, PlayState* p
 s32 ItemExtension_OfferExtendedGetItem(Actor* actor, PlayState* play, s16 getItemIdEx, f32 xzRange, f32 yRange) {
     gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(getItemIdEx);
     gEntryGI.textId = GI_START_TEXT+getItemIdEx;
-    gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0;
+    gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0
     gEntryGI.gid = GID_CUSTOM;
     sDrawItemTable[GID_CUSTOM] = *gCustomItemEntries[getItemIdEx].drawEntryGI;
     //sDrawItemTable[GID_CUSTOM].drawResources[0] = gGiBugContainerContentsDL;
@@ -698,14 +698,14 @@ s32 ItemExtension_OfferExtendedGetItem(Actor* actor, PlayState* play, s16 getIte
 }
 
 s32 ItemExtension_OfferExtendedGetItemFar(Actor* actor, PlayState* play, s16 getItemIdEx) {
-    return ItemExtension_OfferExtendedGetItem(actor, play, gAlteredGI, 9999.9f, 9999.9f);
+    return ItemExtension_OfferExtendedGetItem(actor, play, getItemIdEx, 9999.9f, 9999.9f);
 }
 
 s32 ItemExtension_OfferExtendedGetItemUnconditional(Actor* actor, PlayState* play, s16 getItemIdEx) {
     GetItemId getItemId = gAlteredGI;
     gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(getItemIdEx);
     gEntryGI.textId = GI_START_TEXT+getItemIdEx;
-    gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0;
+    gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0
     gEntryGI.gid = GID_CUSTOM;
     sDrawItemTable[GID_CUSTOM] = *gCustomItemEntries[getItemIdEx].drawEntryGI;
     //sDrawItemTable[GID_CUSTOM].drawResources[0] = gGiBugContainerContentsDL;
@@ -759,12 +759,67 @@ void Setup_Player_Action_ExchangeItem(Player* this, PlayState* play) {
     sGetItemTable[gAlteredGI-1] = gEntryGI;
 }
 
+#define SPECIAL_ITEM_CHEST_VALUE 0xFB
+#define SPECIAL_ITEM_CHEST_PARAM ((((u16)SPECIAL_ITEM_CHEST_VALUE))<<7)
+
+s8 gUnk_1F3 = 0;
+EnBox* gBox;
+
+RECOMP_HOOK("EnBox_Init")
+void Setup_EnBox_Init(Actor* thisx, PlayState* play) {
+    EnBox* box = ((EnBox*)thisx);
+    gBox = box;
+    recomp_printf("EnBox_Init- %d: %d\n", thisx->world.rot.z,((thisx->world.rot.z>>7) & 0xFF));
+    if (((thisx->world.rot.z>>7) & 0xFF) == SPECIAL_ITEM_CHEST_VALUE) {
+        box->unk_1F3 = ENBOX_GET_ITEM(thisx)+1;
+        gUnk_1F3 = ENBOX_GET_ITEM(thisx)+1;;
+        thisx->params &= ~(0x7F << 5);
+        thisx->params |= (gAlteredGI << 5);
+        thisx->world.rot.z &= ~(0xFF << 7);
+        recomp_printf("EnBox_Init2- %d\n", box->unk_1F3);
+    } else {
+        gUnk_1F3 = 0;
+    }
+}
+
+RECOMP_HOOK_RETURN("EnBox_Init")
+void Finalize_EnBox_Init() {
+    gBox->unk_1F3 = gUnk_1F3;
+}
+
+RECOMP_HOOK("EnBox_WaitOpen")
+void Setup_EnBox_WaitOpen(EnBox* this, PlayState* play) {
+    Player* player = GET_PLAYER(play);
+    if (this->unk_1F3) {
+        Vec3f offset;
+        Actor_WorldToActorCoords(&this->dyna.actor, &offset, &player->actor.world.pos);
+        if ((offset.z > -50.0f) && (offset.z < 0.0f) && (fabsf(offset.y) < 10.0f) && (fabsf(offset.x) < 20.0f) &&
+                Player_IsFacingActor(&this->dyna.actor, 0x3000, play)) {
+
+            recomp_printf("EnBox_WaitOpen2- %d\n", this->unk_1F3);
+            gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(this->unk_1F3-1);
+            gEntryGI.textId = GI_START_TEXT+this->unk_1F3-1;
+            gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0
+            gEntryGI.gid = GID_CUSTOM;
+            sDrawItemTable[GID_CUSTOM] = *gCustomItemEntries[this->unk_1F3-1].drawEntryGI;
+        }
+    }
+}
+
 //////// REMOVE THESE ON RELEASE
 #include "overlays/actors/ovl_En_Guruguru/z_en_guruguru.h"
 #include "overlays/actors/ovl_En_Sellnuts/z_en_sellnuts.h"
 extern u16 textIDs[];
 void func_80BC7520(EnGuruguru* this, PlayState* play);
 void func_80ADBCE4(EnSellnuts* this, PlayState* play);
+
+RECOMP_HOOK("EnSellnuts_Init")
+void Setup_EnSellnuts_Init(Actor* thisx, PlayState* play){
+    EnSellnuts* this = (EnSellnuts*)thisx;
+    Actor_Spawn(&play->actorCtx, play, ACTOR_EN_BOX, this->actor.world.pos.x+150, this->actor.world.pos.y,
+                this->actor.world.pos.z, 0, this->actor.shape.rot.y, SPECIAL_ITEM_CHEST_PARAM | 0x7F,
+                ENBOX_PARAMS(ENBOX_TYPE_BIG, 0, 0x12));
+}
 
 RECOMP_PATCH
 void func_80ADBBEC(EnSellnuts* this, PlayState* play) {
@@ -804,7 +859,7 @@ extern s16 sRupeeRefillCounts[];
 RECOMP_PATCH
 u8 Item_CheckObtainability(u8 item) {
     if (ItemExtension_ToNewItemRange(item) >= 0)
-        return ITEM_NONE;
+        return ITEM_NONE; //gNewInventoryItemSlots[ItemExtension_ToNewItemRange(item)];
 
     return Item_CheckObtainabilityImpl(item);
 }
