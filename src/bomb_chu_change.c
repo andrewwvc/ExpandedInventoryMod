@@ -591,7 +591,7 @@ void Core_Replace_Popup_Text(s16 newEntryNum, char* EZTR_text) {
         (0x1700+NEW_ACTION_ITEMS+newEntryNum),
         EZTR_STANDARD_TEXT_BOX_II,
         1,
-        MESSAGE_ICON_NEW,
+        MESSAGE_ICON_NEW+newEntryNum,
         EZTR_NO_VALUE,
         EZTR_NO_VALUE,
         EZTR_NO_VALUE,
@@ -606,7 +606,7 @@ void Core_Replace_Get_Text(s16 newEntryNum, char* EZTR_text) {
         (GI_START_TEXT+newEntryNum),
         EZTR_STANDARD_TEXT_BOX_II,
         1,
-        MESSAGE_ICON_NEW,
+        MESSAGE_ICON_NEW+newEntryNum,
         EZTR_NO_VALUE,
         EZTR_NO_VALUE,
         EZTR_NO_VALUE,
@@ -689,8 +689,8 @@ RECOMP_HOOK("Player_InitCommon") void setup_inventory(Player* this, PlayState* p
 s32 ItemExtension_OfferExtendedGetItem(Actor* actor, PlayState* play, s16 getItemIdEx, f32 xzRange, f32 yRange) {
     gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(getItemIdEx);
     gEntryGI.textId = GI_START_TEXT+getItemIdEx;
-    gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0
-    gEntryGI.gid = GID_CUSTOM;
+    gEntryGI.objectId = OBJECT_UNSET_0;
+    gEntryGI.gid = GID_CUSTOM+1;
     sDrawItemTable[GID_CUSTOM] = *gCustomItemEntries[getItemIdEx].drawEntryGI;
     //sDrawItemTable[GID_CUSTOM].drawResources[0] = gGiBugContainerContentsDL;
     //sDrawItemTable[GID_CUSTOM].drawResources[1] = gGiBugContainerGlassDL;
@@ -705,8 +705,8 @@ s32 ItemExtension_OfferExtendedGetItemUnconditional(Actor* actor, PlayState* pla
     GetItemId getItemId = gAlteredGI;
     gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(getItemIdEx);
     gEntryGI.textId = GI_START_TEXT+getItemIdEx;
-    gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0
-    gEntryGI.gid = GID_CUSTOM;
+    gEntryGI.objectId = OBJECT_UNSET_0;
+    gEntryGI.gid = GID_CUSTOM+1;
     sDrawItemTable[GID_CUSTOM] = *gCustomItemEntries[getItemIdEx].drawEntryGI;
     //sDrawItemTable[GID_CUSTOM].drawResources[0] = gGiBugContainerContentsDL;
     //sDrawItemTable[GID_CUSTOM].drawResources[1] = gGiBugContainerGlassDL;
@@ -799,9 +799,9 @@ void Setup_EnBox_WaitOpen(EnBox* this, PlayState* play) {
             recomp_printf("EnBox_WaitOpen2- %d\n", this->unk_1F3);
             gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(this->unk_1F3-1);
             gEntryGI.textId = GI_START_TEXT+this->unk_1F3-1;
-            gEntryGI.objectId = OBJECT_GI_INSECT;//OBJECT_UNSET_0
+            gEntryGI.objectId = OBJECT_UNSET_0;
             gEntryGI.gid = GID_CUSTOM;
-            sDrawItemTable[GID_CUSTOM] = *gCustomItemEntries[this->unk_1F3-1].drawEntryGI;
+            sDrawItemTable[GID_CUSTOM-1] = *gCustomItemEntries[this->unk_1F3-1].drawEntryGI;
         }
     }
 }
