@@ -6,14 +6,14 @@
 #include "object_gi_insect_custom.h"
 
 
-RECOMP_IMPORT(".", s16 ItemExtension_ToNewItemRange(s16 itemID));
-RECOMP_IMPORT(".", s16 ItemExtension_FromItemRangeToItemID(s16 itemID));
+RECOMP_IMPORT("chromeless_extended_items_core", s16 ItemExtension_ToNewItemRange(s16 itemID));
+RECOMP_IMPORT("chromeless_extended_items_core", s16 ItemExtension_FromItemRangeToItemID(s16 itemID));
 
-RECOMP_IMPORT(".", NewItemNum InitializeNewItemFromEntry(CustomItemEntry* entry));
+RECOMP_IMPORT("chromeless_extended_items_core", NewItemNum InitializeNewItemFromEntry(CustomItemEntry* entry));
 
-RECOMP_IMPORT(".", s32 ItemExtension_OfferExtendedGetItem(Actor* actor, PlayState* play, s16 getItemIdEx, f32 xzRange, f32 yRange));
-RECOMP_IMPORT(".", s32 ItemExtension_OfferExtendedGetItemFar(Actor* actor, PlayState* play, s16 getItemIdEx));
-RECOMP_IMPORT(".", s32 ItemExtension_OfferExtendedGetItemUnconditional(Actor* actor, PlayState* play, s16 getItemIdEx));
+RECOMP_IMPORT("chromeless_extended_items_core", s32 ItemExtension_OfferExtendedGetItem(Actor* actor, PlayState* play, s16 getItemIdEx, f32 xzRange, f32 yRange));
+RECOMP_IMPORT("chromeless_extended_items_core", s32 ItemExtension_OfferExtendedGetItemFar(Actor* actor, PlayState* play, s16 getItemIdEx));
+RECOMP_IMPORT("chromeless_extended_items_core", s32 ItemExtension_OfferExtendedGetItemUnconditional(Actor* actor, PlayState* play, s16 getItemIdEx));
 
 
 RECOMP_PATCH void EnBomChu_Move(EnBomChu* this, PlayState* play) {
@@ -381,7 +381,7 @@ CustomItemEntry bombmineEntry = {
 
 
 
-RECOMP_CALLBACK(".", ItemExtension_init_items_event)
+RECOMP_CALLBACK("chromeless_extended_items_core", ItemExtension_init_items_event)
 void init_bombmine() {
     sBombmineIN = InitializeNewItemFromEntry(&bombmineEntry);
 }
