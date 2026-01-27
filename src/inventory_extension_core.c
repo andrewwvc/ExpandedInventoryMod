@@ -60,13 +60,15 @@ extern TexturePtr gRupeeCounterIconTex;
 extern TexturePtr gStrayFairyGlowingCircleIconTex;
 
 RECOMP_EXPORT
-s16 ItemExtension_ToNewItemRange(s16 itemID) {
+//s16 ItemExtension_ToNewItemRange(s16 itemID) {
+NewItemNum ItemExtension_ItemIDToNewItemIndex(s16 itemID) {
     return itemID - NEW_ACTION_ITEMS;
 }
 
 RECOMP_EXPORT
-s16 ItemExtension_FromItemRangeToItemID(s16 itemID) {
-    return itemID + NEW_ACTION_ITEMS;
+//s16 ItemExtension_FromItemRangeToItemID(s16 itemID) {
+s16 ItemExtension_NewItemIndexToItemID(NewItemNum newItemIndex) {
+    return newItemIndex + NEW_ACTION_ITEMS;
 }
 
 //Sets a special message item entry to denote that the text will display a new item icon
@@ -101,7 +103,7 @@ RECOMP_HOOK_RETURN("Message_LoadItemIcon") void FinalizeMessage_LoadItemIcon() {
         if (msgCtx->currentTextId < 0x1700)
             memcpy(msgCtx->textboxSegment + 0x1000, gNewItemIcons[msgCtx->currentTextId-GI_START_TEXT], ICON_ITEM_TEX_SIZE);
         else
-            memcpy(msgCtx->textboxSegment + 0x1000, gNewItemIcons[ItemExtension_ToNewItemRange(msgCtx->currentTextId-0x1700)], ICON_ITEM_TEX_SIZE);
+            memcpy(msgCtx->textboxSegment + 0x1000, gNewItemIcons[ItemExtension_ItemIDToNewItemIndex(msgCtx->currentTextId-0x1700)], ICON_ITEM_TEX_SIZE);
 
     }
 }
@@ -146,7 +148,7 @@ GetItemId gAlteredGI = GI_46; /*GI_MASK_CIRCUS_LEADER;*///GI_DEED_LAND;//
 
 
 RECOMP_EXPORT
-NewItemNum InitializeNewItemFromEntry(CustomItemEntry* entry) {
+NewItemNum ItemExtension_InitializeNewItemFromEntry(CustomItemEntry* entry) {
     if (currentNewItemTotal >= NUM_NEW_ITEMS)
         return -1;
 
@@ -190,16 +192,16 @@ RECOMP_HOOK("Player_InitCommon") void setup_inventory(Player* this, PlayState* p
     for (s16 ii = 0; ii < currentNewItemTotal; ii++) {
         if (sNewItemSlotAssignments[ii] >= 0 && sNewItemSlotAssignments[ii] < SLOT_NONE) {
             if (sNewItemSlotAssignments[ii] < MAX_REGULAR_SLOTS)
-                gSaveContext.save.saveInfo.inventory.items[sNewItemSlotAssignments[ii]] = ItemExtension_FromItemRangeToItemID(ii);
+                gSaveContext.save.saveInfo.inventory.items[sNewItemSlotAssignments[ii]] = ItemExtension_NewItemIndexToItemID(ii);
             else if (gCustomItemEntries[ii].mujuraFuncs.slotAssignment == SA_AUTO_PREFILL)
-                gNewInventoryItemSlots[sNewItemSlotAssignments[ii]-MAX_REGULAR_SLOTS] = ItemExtension_FromItemRangeToItemID(ii);
+                gNewInventoryItemSlots[sNewItemSlotAssignments[ii]-MAX_REGULAR_SLOTS] = ItemExtension_NewItemIndexToItemID(ii);
         }
     }
 }
 
 RECOMP_EXPORT
 s32 ItemExtension_OfferExtendedGetItem(Actor* actor, PlayState* play, s16 getItemIdEx, f32 xzRange, f32 yRange) {
-    gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(getItemIdEx);
+    gEntryGI.itemId = ItemExtension_NewItemIndexToItemID(getItemIdEx);
     gEntryGI.textId = GI_START_TEXT+getItemIdEx;
     gEntryGI.objectId = OBJECT_UNSET_0;
     gEntryGI.gid = GID_CUSTOM+1;
@@ -215,7 +217,7 @@ s32 ItemExtension_OfferExtendedGetItemFar(Actor* actor, PlayState* play, s16 get
 RECOMP_EXPORT
 s32 ItemExtension_OfferExtendedGetItemUnconditional(Actor* actor, PlayState* play, s16 getItemIdEx) {
     GetItemId getItemId = gAlteredGI;
-    gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(getItemIdEx);
+    gEntryGI.itemId = ItemExtension_NewItemIndexToItemID(getItemIdEx);
     gEntryGI.textId = GI_START_TEXT+getItemIdEx;
     gEntryGI.objectId = OBJECT_UNSET_0;
     gEntryGI.gid = GID_CUSTOM+1;
@@ -301,7 +303,7 @@ void Setup_EnBox_WaitOpen(EnBox* this, PlayState* play) {
         if ((offset.z > -50.0f) && (offset.z < 0.0f) && (fabsf(offset.y) < 10.0f) && (fabsf(offset.x) < 20.0f) &&
                 Player_IsFacingActor(&this->dyna.actor, 0x3000, play)) {
 
-            gEntryGI.itemId = ItemExtension_FromItemRangeToItemID(this->unk_1F3-1);
+            gEntryGI.itemId = ItemExtension_NewItemIndexToItemID(this->unk_1F3-1);
             gEntryGI.textId = GI_START_TEXT+this->unk_1F3-1;
             gEntryGI.objectId = OBJECT_UNSET_0;
             gEntryGI.gid = GID_CUSTOM;
@@ -319,8 +321,8 @@ extern s16 sRupeeRefillCounts[];
 
 RECOMP_PATCH
 u8 Item_CheckObtainability(u8 item) {
-    if (ItemExtension_ToNewItemRange(item) >= 0)
-        return ITEM_NONE; //gNewInventoryItemSlots[ItemExtension_ToNewItemRange(item)];
+    if (ItemExtension_ItemIDToNewItemIndex(item) >= 0)
+        return ITEM_NONE; //gNewInventoryItemSlots[ItemExtension_ItemIDToNewItemIndex(item)];
 
     return Item_CheckObtainabilityImpl(item);
 }
@@ -332,8 +334,8 @@ u8 Item_Give(PlayState* play, u8 item) {
     u8 temp;
     u8 slot;
 
-    if (ItemExtension_ToNewItemRange(item) >= 0) {
-        slot = sNewItemSlotAssignments[ItemExtension_ToNewItemRange(item)];
+    if (ItemExtension_ItemIDToNewItemIndex(item) >= 0) {
+        slot = sNewItemSlotAssignments[ItemExtension_ItemIDToNewItemIndex(item)];
         if (slot != SLOT_NONE) {
             if (slot < MAX_REGULAR_SLOTS)
                 gSaveContext.save.saveInfo.inventory.items[slot] = item;
@@ -766,7 +768,7 @@ PlayerItemAction getUpdatedItemAction(ItemId item) {
     if (item < NEW_ACTION_ITEMS) {
         return sItemItemActions[item];
     } else  {
-        return gNewItemActions[ItemExtension_ToNewItemRange(item)];
+        return gNewItemActions[ItemExtension_ItemIDToNewItemIndex(item)];
     }
 }
 
@@ -864,7 +866,7 @@ RECOMP_PATCH void Interface_LoadItemIconImpl(PlayState* play, u8 btn) {
 
     ItemId curItem = GET_CUR_FORM_BTN_ITEM(btn);
     if (curItem >= NEW_ACTION_ITEMS) {
-        memcpy(&interfaceCtx->iconItemSegment[(u32)btn * ICON_ITEM_TEX_SIZE], gNewItemIcons[ItemExtension_ToNewItemRange(curItem)], ICON_ITEM_TEX_SIZE);
+        memcpy(&interfaceCtx->iconItemSegment[(u32)btn * ICON_ITEM_TEX_SIZE], gNewItemIcons[ItemExtension_ItemIDToNewItemIndex(curItem)], ICON_ITEM_TEX_SIZE);
     } else {
         CmpDma_LoadFile(SEGMENT_ROM_START(icon_item_static_yar), curItem,
                         &interfaceCtx->iconItemSegment[(u32)btn * ICON_ITEM_TEX_SIZE], ICON_ITEM_TEX_SIZE);
@@ -936,7 +938,7 @@ RECOMP_PATCH void Interface_DrawPauseMenuEquippingIcons(PlayState* play) {
             // Normal Equip (icon goes from the inventory slot to the C button when equipping it)
             gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, pauseCtx->equipAnimAlpha);
             gSPVertex(OVERLAY_DISP++, &pauseCtx->cursorVtx[16], 4, 0);
-            gDPLoadTextureBlock(OVERLAY_DISP++, gNewItemIcons[ItemExtension_ToNewItemRange(pauseCtx->equipTargetItem)], G_IM_FMT_RGBA, G_IM_SIZ_32b,
+            gDPLoadTextureBlock(OVERLAY_DISP++, gNewItemIcons[ItemExtension_ItemIDToNewItemIndex(pauseCtx->equipTargetItem)], G_IM_FMT_RGBA, G_IM_SIZ_32b,
                                 ICON_ITEM_TEX_WIDTH, ICON_ITEM_TEX_HEIGHT, 0, G_TX_NOMIRROR | G_TX_WRAP,
                                 G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
         }
@@ -1032,7 +1034,7 @@ RECOMP_PATCH void KaleidoScope_DrawItemSelect(PlayState* play) {
                     play->state.gfxCtx, gItemIcons[((void)0, gSaveContext.save.saveInfo.inventory.items[i])], 32, 32, 0);
             } else {
                 KaleidoScope_DrawTexQuadRGBA32(
-                    play->state.gfxCtx, gNewItemIcons[ItemExtension_ToNewItemRange(gSaveContext.save.saveInfo.inventory.items[i])], 32, 32, 0);
+                    play->state.gfxCtx, gNewItemIcons[ItemExtension_ItemIDToNewItemIndex(gSaveContext.save.saveInfo.inventory.items[i])], 32, 32, 0);
             }
         }
     }
@@ -1062,7 +1064,7 @@ RECOMP_PATCH void KaleidoScope_DrawItemSelect(PlayState* play) {
                     play->state.gfxCtx, gItemIcons[newItem], 32, 32, 0);
             } else {
                 KaleidoScope_DrawTexQuadRGBA32(
-                    play->state.gfxCtx, gNewItemIcons[ItemExtension_ToNewItemRange(newItem)], 32, 32, 0);
+                    play->state.gfxCtx, gNewItemIcons[ItemExtension_ItemIDToNewItemIndex(newItem)], 32, 32, 0);
             }
         }
     }
@@ -1096,7 +1098,7 @@ RECOMP_PATCH void Kaleido_LoadItemNameStatic(void* segment, u32 texIndex) {
     if (texIndex < NEW_ACTION_ITEMS)
         CmpDma_LoadFile(SEGMENT_ROM_START(item_name_static), texIndex, segment, 0x400);
     else
-        memcpy(segment, gNewItemNames[ItemExtension_ToNewItemRange(texIndex)], 0x400);
+        memcpy(segment, gNewItemNames[ItemExtension_ItemIDToNewItemIndex(texIndex)], 0x400);
 }
 
 static PlayState* MyTempPlay;
